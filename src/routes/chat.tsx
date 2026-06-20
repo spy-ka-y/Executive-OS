@@ -34,6 +34,8 @@ const QUICK_ACTIONS: Array<{ label: string; prompt: string; icon: React.ElementT
   { label: "Boardroom Summary", prompt: "Generate a boardroom summary with CEO, CFO, COO, and CMO perspectives.", icon: Users },
 ];
 
+const AGENT_ID = "Se7l9eh9kb-0vhrP7QANVG9PZbo";
+
 function ChatPage() {
   const { activeDatasetId } = useActiveDataset();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -41,6 +43,7 @@ function ChatPage() {
   const [thinking, setThinking] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const conversationId = useRef(crypto.randomUUID());
 
   const { data: dataset } = useQuery({
     queryKey: ["dataset", activeDatasetId],
@@ -63,6 +66,13 @@ function ChatPage() {
 
   useEffect(() => { textareaRef.current?.focus(); }, []);
 
+  const suggestedPrompts = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of STARTERS) set.add(s);
+    for (const a of QUICK_ACTIONS) set.add(a.prompt);
+    return set;
+  }, []);
+
   async function send(text: string) {
     if (!text.trim() || thinking) return;
     const userMsg: ChatMessage = {
@@ -71,6 +81,17 @@ function ChatPage() {
       content: text.trim(),
       created_at: new Date().toISOString(),
     };
+
+    if (typeof window !== "undefined" && window.pendo?.trackAgent) {
+      window.pendo.trackAgent("prompt", {
+        agentId: AGENT_ID,
+        conversationId: conversationId.current,
+        messageId: userMsg.id,
+        content: userMsg.content,
+        suggestedPrompt: suggestedPrompts.has(text.trim()),
+      });
+    }
+
     setMessages((m) => [...m, userMsg]);
     setInput("");
     setThinking(true);
@@ -84,6 +105,15 @@ function ChatPage() {
         question: text.trim(),
       });
       setMessages((m) => [...m, reply]);
+
+      if (typeof window !== "undefined" && window.pendo?.trackAgent) {
+        window.pendo.trackAgent("agent_response", {
+          agentId: AGENT_ID,
+          conversationId: conversationId.current,
+          messageId: reply.id,
+          content: reply.content,
+        });
+      }
     } finally {
       setThinking(false);
       setTimeout(() => textareaRef.current?.focus(), 0);
