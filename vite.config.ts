@@ -12,4 +12,9 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  // Enable the Nitro deploy plugin and target Vercel so SSR + server functions
+  // (the Gemini AI brain) ship as Vercel serverless functions. Override the
+  // preset with the NITRO_PRESET env var for other hosts. The Lovable sandbox
+  // still force-builds Cloudflare regardless of this setting.
+  nitro: { preset: process.env.NITRO_PRESET || "vercel" },
 });
