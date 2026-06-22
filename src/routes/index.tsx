@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 
 import { EmptyState } from "@/components/page-header";
 import { KpiCard } from "@/components/kpi-card";
+import { DataQualityPanel } from "@/components/data-quality-panel";
 import { Button } from "@/components/ui/button";
 import { useActiveDataset } from "@/lib/dataset-context";
 import {
@@ -164,6 +165,9 @@ function DashboardPage() {
         uploading={uploading}
         onUpload={openUpload}
       />
+
+      {/* Data quality, so trust is earned before the numbers are read */}
+      {hasData && dataset && <DataQualityPanel schema={dataset.schema} rows={rows} />}
 
       {/* Landing analytics overview, just the gist */}
       {hasData && <AnalyticsOverview kpis={kpis!} forecast={forecast} intel={resolvedIntel!} />}
@@ -395,7 +399,7 @@ function ExecutiveBrief({
 
       <p className="text-sm uppercase tracking-[0.3em] text-secondary mb-4">Today's Executive Brief</p>
       <h1 className="font-display text-5xl lg:text-7xl tracking-tight leading-[1.0] text-balance">
-        {greeting}, <span className="italic gradient-text">Yash</span>
+        <span className="gradient-text">{greeting}</span>
       </h1>
 
       {/* Key metrics */}
@@ -530,9 +534,26 @@ export function StrategicSignals({
               </div>
             </div>
             <div className="executive-card rounded-3xl p-7">
-              <div className="flex items-center gap-2 mb-5">
-                <Sparkles className="h-4 w-4 text-secondary" />
-                <h3 className="font-display text-2xl">Forecast</h3>
+              <div className="flex items-center justify-between gap-2 mb-5">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-secondary" />
+                  <h3 className="font-display text-2xl">Forecast</h3>
+                </div>
+                {forecast?.fitStrength && (
+                  <span
+                    className={cn(
+                      "text-[10px] uppercase tracking-[0.14em] px-2 py-0.5 rounded border",
+                      forecast.fitStrength === "strong" ? "bg-success/15 text-success border-success/30" :
+                      forecast.fitStrength === "moderate" ? "bg-secondary/15 text-secondary border-secondary/30" :
+                      forecast.fitStrength === "weak" ? "bg-warning/15 text-warning border-warning/30" :
+                      "bg-muted text-muted-foreground border-border",
+                    )}
+                    title={`Trend fit on your revenue series${forecast.r2 != null ? ` (R² ${forecast.r2.toFixed(2)})` : ""}${forecast.mape != null ? `, ±${forecast.mape}% backtest error` : ""}.`}
+                  >
+                    {forecast.fitStrength === "insufficient" ? "Low data" : `${forecast.fitStrength} fit`}
+                    {forecast.mape != null ? ` · ±${forecast.mape}%` : ""}
+                  </span>
+                )}
               </div>
               <div className="h-72">
                 {forecast && (

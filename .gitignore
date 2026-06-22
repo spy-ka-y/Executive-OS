@@ -3,6 +3,12 @@
 .env.*
 !.env.example
 
+# Python ML pipeline — keep the .onnx (app runtime needs it) + scripts; ignore
+# the intermediate joblib and caches (regenerable via ml/train_risk_model.py).
+__pycache__/
+*.pyc
+ml/*.joblib
+
 # Logs
 logs
 *.log

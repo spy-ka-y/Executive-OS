@@ -113,9 +113,9 @@ export function assessReadiness(context: ExecutiveContext | null): BrainReadines
     },
     {
       key: "provider-adapters",
-      label: "Provider Adapters",
+      label: "Provider Adapter",
       level: "Ready",
-      detail: "OpenAI / Claude / Gemini adapters wired; local heuristic adapter executes until a remote provider is connected.",
+      detail: "Gemini adapter wired; the built-in deterministic engine runs whenever the live model is unavailable.",
     },
     {
       key: "agent-contracts",
@@ -133,13 +133,13 @@ export function assessReadiness(context: ExecutiveContext | null): BrainReadines
       key: "provider-interface",
       label: "Provider Interface",
       level: "Ready",
-      detail: "OpenAI / Claude / Gemini providers registered. Routing + prompt contracts ready.",
+      detail: "Gemini provider registered. Routing and prompt contracts ready.",
     },
     {
       key: "llm",
       label: "LLM Provider Connection",
       level: "Missing",
-      detail: "Architecture ready. No remote model connected yet (OpenAI / Claude / Gemini).",
+      detail: "Set GEMINI_API_KEY on the server to connect the live model; until then the built-in engine answers.",
     },
   ];
 

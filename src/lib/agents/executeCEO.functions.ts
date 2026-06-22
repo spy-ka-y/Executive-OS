@@ -69,15 +69,26 @@ export const executeCEO = createServerFn({ method: "POST" })
     const { executeGeminiPrompt, isGeminiConfigured, GeminiError } = await import(
       "@/lib/ai/gemini.server"
     );
+    const cost = await import("@/lib/ai/cost-control.server");
 
     if (!isGeminiConfigured()) {
       return { ok: false, error: { code: "missing_key", message: "GEMINI_API_KEY is not configured on the server." } };
     }
 
     const { system, user } = assemblePrompts(data);
+    const model = cost.defaultModel() ?? "gemini-2.5-flash";
+
+    // Cache + daily budget so a multi-agent meeting can't run up cost or quota.
+    const key = cost.cacheKey({ section: "boardroom-ceo", json: true, model, system, user });
+    const cached = cost.getCached<ExecuteCEOResult>(key);
+    if (cached) return cached;
+    if (cost.isOverBudget()) {
+      return { ok: false, error: { code: "budget_exceeded", message: "Daily live-AI call budget reached; the boardroom is using its heuristic baseline." } };
+    }
 
     try {
-      const res = await executeGeminiPrompt({ system, user, model: "gemini-2.5-flash" });
+      const res = await executeGeminiPrompt({ system, user, model });
+      cost.recordCall(res.promptTokens, res.responseTokens);
       const validated = AgentResponseSchema.safeParse(res.parsed);
       if (!validated.success) {
         return {
@@ -91,7 +102,7 @@ export const executeCEO = createServerFn({ method: "POST" })
         };
       }
       const response: AgentResponse = { ...validated.data, agent: "CEO" };
-      return {
+      const result: ExecuteCEOResult = {
         ok: true,
         response,
         raw: res.raw,
@@ -103,6 +114,8 @@ export const executeCEO = createServerFn({ method: "POST" })
           totalTokens: res.totalTokens,
         },
       };
+      cost.setCached(key, result);
+      return result;
     } catch (e) {
       if (e instanceof GeminiError) {
         return { ok: false, error: { code: e.code, message: e.message, raw: e.raw } };

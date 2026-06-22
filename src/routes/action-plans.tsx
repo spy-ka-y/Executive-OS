@@ -301,8 +301,8 @@ function ExecutionCenterPage() {
         progress: 0,
         dueDays: 30,
         dueDate: p.due ?? daysFromNow(30),
-        revenueImpact: bi ? bi.totalRevenue * 0.04 : 0,
-        profitImpact: bi ? bi.totalProfit * 0.04 : 0,
+        revenueImpact: bi?.upsideBandPct ? bi.totalRevenue * (bi.upsideBandPct.low / 100) : 0,
+        profitImpact: bi?.upsideBandPct ? bi.totalProfit * (bi.upsideBandPct.low / 100) : 0,
         confidence: 72,
         risk: "Medium",
         milestones: DEFAULT_MILESTONES(),
@@ -311,7 +311,7 @@ function ExecutionCenterPage() {
 
     // From Consultant Report recommendations
     (report?.recommendations ?? []).forEach((r) => {
-      const rev = parseFirstNumber(r.expected_revenue_impact) ?? (bi ? bi.totalRevenue * 0.05 : 0);
+      const rev = parseFirstNumber(r.expected_revenue_impact) ?? (bi?.upsideBandPct ? bi.totalRevenue * (bi.upsideBandPct.low / 100) : 0);
       generated.push({
         id: uid(),
         title: r.title,
@@ -347,8 +347,8 @@ function ExecutionCenterPage() {
         progress: 0,
         dueDays: 45,
         dueDate: daysFromNow(45),
-        revenueImpact: bi ? bi.totalRevenue * 0.06 : 0,
-        profitImpact: bi ? bi.totalProfit * 0.06 : 0,
+        revenueImpact: bi?.upsideBandPct ? bi.totalRevenue * (bi.upsideBandPct.high / 100) : 0,
+        profitImpact: bi?.upsideBandPct ? bi.totalProfit * (bi.upsideBandPct.high / 100) : 0,
         confidence: 70,
         risk: "Medium",
         milestones: DEFAULT_MILESTONES(),

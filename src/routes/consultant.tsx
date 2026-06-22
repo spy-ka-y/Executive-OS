@@ -24,7 +24,9 @@ import { getDataset, getDatasetRows } from "@/lib/api/datasets";
 import { computeKpis } from "@/lib/api/analysis";
 import { generateConsultantReport } from "@/lib/api/ai";
 import { latestConsultantReport, saveConsultantReport } from "@/lib/api/persistence";
-import type { ConsultantProblem } from "@/lib/api/types";
+import { GenerationSourceBadge, GenerationSourceNotice } from "@/components/generation-source";
+import { useIndustry } from "@/lib/industry-context";
+import type { ConsultantProblem, GenerationMeta } from "@/lib/api/types";
 
 export const Route = createFileRoute("/consultant")({
   head: () => ({ meta: [{ title: "Consultant Report, ExecutiveOS" }] }),
@@ -40,7 +42,9 @@ const SEVERITY_STYLES: Record<ConsultantProblem["severity"], { label: string; cl
 function ConsultantPage() {
   const qc = useQueryClient();
   const { activeDatasetId } = useActiveDataset();
+  const { industryId } = useIndustry();
   const [busy, setBusy] = useState(false);
+  const [sessionMeta, setSessionMeta] = useState<GenerationMeta | undefined>(undefined);
 
   const { data: dataset } = useQuery({
     queryKey: ["dataset", activeDatasetId],
@@ -68,7 +72,9 @@ function ConsultantPage() {
         kpis,
         rows,
         schema: dataset.schema,
+        industry: industryId,
       });
+      setSessionMeta(next.meta);
       await saveConsultantReport(next);
       await qc.invalidateQueries({ queryKey: ["consultant", activeDatasetId] });
       toast.success("Strategic findings regenerated for this dataset");
@@ -114,6 +120,7 @@ function ConsultantPage() {
         />
       ) : (
         <div className="space-y-6">
+          <GenerationSourceNotice meta={sessionMeta ?? report.meta} />
           {/* Agent banner */}
           <div className="executive-card rounded-xl px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -125,9 +132,12 @@ function ConsultantPage() {
                 <p className="text-xs font-medium leading-tight">Strategy Consulting Agent</p>
               </div>
             </div>
-            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-              ExecutiveOS · Strategic Analysis · {dataset?.name ?? ""}
-            </span>
+            <div className="flex items-center gap-3">
+              <GenerationSourceBadge meta={sessionMeta ?? report.meta} />
+              <span className="hidden sm:inline text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                {dataset?.name ?? ""}
+              </span>
+            </div>
           </div>
 
           {/* Strategic Scores */}
@@ -368,6 +378,7 @@ function ConsultantPage() {
                 <p className="text-[10px] uppercase tracking-[0.2em] text-secondary mb-1.5">Consultant Verdict</p>
                 <p className="text-sm leading-relaxed text-foreground/95">{report.investment_thesis.verdict}</p>
               </div>
+              <p className="text-[10px] text-muted-foreground mt-3">Upside/margin figures are illustrative estimates scaled from your revenue and margin, contingent on execution, not modeled forecasts.</p>
             </div>
           )}
         </div>

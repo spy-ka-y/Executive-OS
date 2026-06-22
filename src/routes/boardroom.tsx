@@ -67,6 +67,7 @@ import { computeWeightedConsensus, type WeightedConsensus } from "@/lib/executiv
 import { computeDecisionQuality, type DecisionQuality } from "@/lib/executive-intelligence/decision-quality";
 import { computeAgentInfluence, type AgentInfluence } from "@/lib/executive-intelligence/agent-influence";
 import { executeCEO, getGeminiStatus, type ExecuteCEOResult } from "@/lib/agents/executeCEO.functions";
+import { pingBrain } from "@/lib/agents/executeBrain.functions";
 import { useServerFn } from "@tanstack/react-start";
 import { callBrain, buildBoardroomAgentPrompt } from "@/lib/ai/brain";
 import { AgentResponseSchema } from "@/lib/schemas/agentResponse";
@@ -177,6 +178,7 @@ function BoardroomPage() {
   // Phase 10, Real CEO execution via Gemini (server function).
   const callCEO = useServerFn(executeCEO);
   const callGeminiStatus = useServerFn(getGeminiStatus);
+  const callPingBrain = useServerFn(pingBrain);
   const [ceoExecution, setCeoExecution] = useState<{
     state: "idle" | "running" | "completed" | "failed";
     result?: ExecuteCEOResult;
@@ -187,11 +189,20 @@ function BoardroomPage() {
 
   useEffect(() => {
     let cancelled = false;
+    // Fast first paint from key presence, then upgrade to a REAL connectivity
+    // probe (one cached model call) so "Connected" means we actually reached it.
     callGeminiStatus({})
       .then((s) => { if (!cancelled) setGeminiStatus(s); })
       .catch(() => { if (!cancelled) setGeminiStatus({ connected: false, model: "gemini-2.5-flash" }); });
+    callPingBrain({})
+      .then((p) => {
+        if (cancelled) return;
+        if (p.ok) setGeminiStatus({ connected: true, model: p.model });
+        else setGeminiStatus({ connected: false, model: "gemini-2.5-flash" });
+      })
+      .catch(() => { /* keep the key-presence status */ });
     return () => { cancelled = true; };
-  }, [callGeminiStatus]);
+  }, [callGeminiStatus, callPingBrain]);
 
   useEffect(() => {
     if (!intel) return;
@@ -304,7 +315,7 @@ function BoardroomPage() {
   async function recordMeeting() {
     setBusy(true);
     try {
-      const { decision } = debate;
+      const decision = liveDecision;
       const responses = liveResponses;
       const header = `MEETING · ${session ? `Session ${session.id.slice(0, 8)} · started ${new Date(session.startedAt).toLocaleString()}` : new Date().toLocaleString()}\nQuestion: ${topic}${scenario ? `\nScenario: price ${scenario.priceChangePct}%, marketing ${scenario.marketingSpendDeltaPct}%, headcount ${scenario.headcountDelta}, churn ${scenario.churnDeltaPct}%` : ""}`;
       const msgs = [
@@ -363,6 +374,27 @@ function BoardroomPage() {
     }),
     [debate.responses, aiAgents],
   );
+
+  // When the live Gemini debate has produced replies, the headline Board
+  // Decision must reflect THOSE agents — not the heuristic baseline. Recompute
+  // consensus and confidence from the actual live agent supports/confidences so
+  // the verdict genuinely changes with the live debate.
+  const hasLiveDebate = Object.keys(aiAgents).length > 0;
+  const liveDecision = useMemo(() => {
+    const d = debate.decision;
+    if (!hasLiveDebate || liveResponses.length === 0) return d;
+    const consensusScore = Math.round(
+      liveResponses.reduce((a, b) => a + b.support, 0) / liveResponses.length,
+    );
+    const confidence = Math.round(
+      liveResponses.reduce((a, b) => a + b.confidence, 0) / liveResponses.length,
+    );
+    // Risk escalates if the live board fails to reach consensus, otherwise the
+    // data-derived risk level stands.
+    const riskLevel: typeof d.riskLevel =
+      consensusScore < 50 ? "High" : consensusScore < 62 && d.riskLevel === "Low" ? "Medium" : d.riskLevel;
+    return { ...d, consensusScore, confidence, riskLevel };
+  }, [debate.decision, liveResponses, hasLiveDebate]);
 
   const stanceToSupport = (s: string) => (s === "Support" ? 85 : s === "Conditional" ? 65 : s === "Neutral" ? 50 : 25);
 
@@ -472,32 +504,36 @@ function BoardroomPage() {
             )}
             <div className="executive-card-elevated rounded-xl p-6">
               <p className="text-[10px] uppercase tracking-[0.22em] text-secondary mb-2">Recommended Action</p>
-              <h3 className="font-display text-2xl leading-tight">{debate.decision.recommendedAction}</h3>
+              <h3 className="font-display text-2xl leading-tight">{liveDecision.recommendedAction}</h3>
               <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-3 mt-5">
-                <DecisionStat label="Revenue Impact" value={debate.decision.expectedRevenueImpact} tone="success" />
-                <DecisionStat label="Profit Impact" value={debate.decision.expectedProfitImpact} tone="success" />
-                <DecisionStat label="Risk Level" value={debate.decision.riskLevel} tone={debate.decision.riskLevel === "High" ? "destructive" : debate.decision.riskLevel === "Medium" ? "warning" : "success"} />
+                <DecisionStat label="Revenue Impact*" value={liveDecision.expectedRevenueImpact} tone="success" />
+                <DecisionStat label="Profit Impact*" value={liveDecision.expectedProfitImpact} tone="success" />
+                <DecisionStat label="Risk Level" value={liveDecision.riskLevel} tone={liveDecision.riskLevel === "High" ? "destructive" : liveDecision.riskLevel === "Medium" ? "warning" : "success"} />
                 <DecisionStat label="Strategic Alignment" value={`${debate.strategicAlignment}/100`} tone={debate.strategicAlignment >= 70 ? "success" : debate.strategicAlignment >= 50 ? "warning" : "destructive"} />
-                <DecisionStat label="Confidence" value={`${debate.decision.confidence}%`} />
-                <DecisionStat label="Recommended Owner" value={debate.decision.recommendedOwner} />
-                <DecisionStat label="Timeline" value={debate.decision.timeline} />
-                <DecisionStat label="Consensus" value={`${debate.decision.consensusScore}/100`} />
+                <DecisionStat label="Confidence" value={`${liveDecision.confidence}%`} />
+                <DecisionStat label="Recommended Owner" value={liveDecision.recommendedOwner} />
+                <DecisionStat label="Timeline" value={liveDecision.timeline} />
+                <DecisionStat label="Consensus" value={`${liveDecision.consensusScore}/100`} />
               </div>
+              <p className="text-[10px] text-muted-foreground mt-3">
+                {hasLiveDebate ? "Consensus & confidence computed from the live Gemini agent debate." : "Heuristic baseline. Start a meeting to run the live AI debate."}
+                {" "}*Revenue/profit impact is an illustrative estimate (revenue-scaled), not a modeled prediction.
+              </p>
             </div>
           </Section>
 
           {/* SECTION 9, Boardroom summary (shown immediately after the decision) */}
           <Section icon={<FileText className="h-4 w-4" />} label="09" title="Boardroom Summary" subtitle="Key agreements, disagreements, final recommendation and next actions.">
             <div className="grid md:grid-cols-2 gap-4">
-              <SummaryCard title="Key Agreements" items={debate.decision.keyAgreements} tone="success" />
-              <SummaryCard title="Key Disagreements" items={debate.decision.keyDisagreements} tone="warning" />
-              <SummaryCard title="Final Recommendation" items={[debate.decision.recommendedAction]} tone="primary" />
-              <SummaryCard title="Next Actions" items={debate.decision.nextActions} tone="secondary" />
+              <SummaryCard title="Key Agreements" items={liveDecision.keyAgreements} tone="success" />
+              <SummaryCard title="Key Disagreements" items={liveDecision.keyDisagreements} tone="warning" />
+              <SummaryCard title="Final Recommendation" items={[liveDecision.recommendedAction]} tone="primary" />
+              <SummaryCard title="Next Actions" items={liveDecision.nextActions} tone="secondary" />
             </div>
             <div className="executive-card-elevated rounded-xl p-5 mt-4 flex items-center justify-between">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Boardroom Confidence Score</p>
-                <p className="font-display text-3xl">{debate.decision.confidence}/100</p>
+                <p className="font-display text-3xl">{liveDecision.confidence}/100</p>
               </div>
               <Button onClick={recordMeeting} disabled={busy}><PlayCircle className="h-4 w-4 mr-2" /> Record this meeting</Button>
             </div>
@@ -644,8 +680,8 @@ function BoardroomPage() {
           <Section icon={<Gauge className="h-4 w-4" />} label="05" title="Consensus & Strategic Alignment" subtitle="Agent-by-agent support, overall consensus, and how this decision aligns with active initiatives and prior decisions.">
             <div className="grid lg:grid-cols-3 gap-4">
               <div className="executive-card-elevated rounded-xl p-6 flex flex-col items-center">
-                <ScoreRing value={debate.decision.consensusScore} label="Consensus" size={140} tone={debate.decision.consensusScore >= 70 ? "success" : debate.decision.consensusScore >= 50 ? "warning" : "destructive"} />
-                <p className="text-xs text-muted-foreground text-center mt-3">{debate.decision.consensusScore >= 70 ? "Strong consensus, execute." : debate.decision.consensusScore >= 50 ? "Conditional consensus, address gates." : "Low consensus, rework proposal."}</p>
+                <ScoreRing value={liveDecision.consensusScore} label="Consensus" size={140} tone={liveDecision.consensusScore >= 70 ? "success" : liveDecision.consensusScore >= 50 ? "warning" : "destructive"} />
+                <p className="text-xs text-muted-foreground text-center mt-3">{liveDecision.consensusScore >= 70 ? "Strong consensus, execute." : liveDecision.consensusScore >= 50 ? "Conditional consensus, address gates." : "Low consensus, rework proposal."}</p>
               </div>
               <div className="executive-card-elevated rounded-xl p-6 flex flex-col items-center">
                 <ScoreRing value={debate.strategicAlignment} label="Strategic Alignment" size={140} tone={debate.strategicAlignment >= 70 ? "success" : debate.strategicAlignment >= 50 ? "warning" : "destructive"} />
@@ -938,7 +974,7 @@ function ContextPreview({ context, scenario }: { context: ExecutiveContext; scen
     memoryStats: context.memoryStats,
   };
   return (
-    <Section icon={<Cpu className="h-4 w-4" />} label="01.6" title="Executive Context Preview" subtitle="The full briefing object the agents reason from, the same payload a future LLM provider will receive.">
+    <Section icon={<Cpu className="h-4 w-4" />} label="01.6" title="Executive Context Preview" subtitle="The full briefing object the agents reason from, the same payload sent to Gemini on each live debate.">
       <Collapsible open={open} onOpenChange={setOpen}>
         <div className="executive-card rounded-xl">
           <CollapsibleTrigger className="w-full flex items-center justify-between p-5 text-left">
@@ -1136,7 +1172,7 @@ function ConsensusDistribution({ consensus }: { consensus: ConsensusBreakdown })
 
 function DecisionFramework({ record }: { record: BoardDecisionRecord }) {
   return (
-    <Section icon={<ShieldCheck className="h-4 w-4" />} label="06.5" title="Board Decision Framework" subtitle="The canonical decision schema. This is exactly what a future LLM response must produce.">
+    <Section icon={<ShieldCheck className="h-4 w-4" />} label="06.5" title="Board Decision Framework" subtitle="The canonical decision schema each Gemini agent response is validated against.">
       <div className="executive-card-elevated rounded-xl p-6 space-y-5">
         <div className="grid md:grid-cols-2 gap-3">
           <DecisionStat label="Strategic Objective" value={record.strategicObjective} />
@@ -1195,12 +1231,12 @@ const LEVEL_TONE: Record<ReadinessLevel, string> = {
 function BrainStatus({ readiness }: { readiness: BrainReadiness }) {
   const tone = readiness.score >= 80 ? "success" : readiness.score >= 50 ? "warning" : "destructive";
   return (
-    <Section icon={<Brain className="h-4 w-4" />} label="17" title="Executive Brain Status" subtitle="Architecture readiness for LLM integration. Each component is wired and inspectable before any model is connected.">
+    <Section icon={<Brain className="h-4 w-4" />} label="17" title="Executive Brain Status" subtitle="Reasoning stack powering the live Gemini agents. Each component is wired, inspectable, and in use during a live debate.">
       <div className="grid lg:grid-cols-[260px_1fr] gap-4">
         <div className="executive-card-elevated rounded-xl p-6 flex flex-col items-center">
           <ScoreRing value={readiness.score} label="AI Readiness" size={140} tone={tone} />
           <p className="text-[11px] text-muted-foreground text-center mt-3">
-            {readiness.score >= 80 ? "Architecture ready, slot in an LLM provider when desired." : readiness.score >= 50 ? "Most components wired, finish the partials to unlock full reasoning." : "Foundation in place, load a dataset and seed memory to advance."}
+            {readiness.score >= 80 ? "Reasoning stack fully wired and running live against Gemini." : readiness.score >= 50 ? "Most components wired, finish the partials to unlock full reasoning." : "Foundation in place, load a dataset and seed memory to advance."}
           </p>
         </div>
         <div className="grid sm:grid-cols-2 gap-2">
@@ -1231,7 +1267,7 @@ const STATUS_TONE: Record<"READY" | "PENDING" | "MISSING", string> = {
 
 function OrchestrationCenter({ status }: { status: ReturnType<typeof orchestrationStatus> }) {
   return (
-    <Section icon={<Workflow className="h-4 w-4" />} label="11" title="LLM Orchestration Center" subtitle="The pipeline ExecutiveOS will use to talk to a future LLM provider. Every stage is wired and inspectable today.">
+    <Section icon={<Workflow className="h-4 w-4" />} label="11" title="LLM Orchestration Center" subtitle="The pipeline ExecutiveOS uses to talk to Gemini. Every stage is wired, inspectable, and runs on each live debate.">
       <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2">
         {status.map((s) => (
           <div key={s.key} className="executive-card rounded-xl p-4">
@@ -1274,7 +1310,7 @@ function CollapsibleCard({ title, subtitle, body, icon }: { title: string; subti
 
 function PromptBuilderInspector({ bundle }: { bundle: ExecutivePromptBundle }) {
   return (
-    <Section icon={<Terminal className="h-4 w-4" />} label="12" title="Executive Prompt Builder" subtitle="The exact prompt and context payload that will be sent to a future LLM. Inspection only, no API calls.">
+    <Section icon={<Terminal className="h-4 w-4" />} label="12" title="Executive Prompt Builder" subtitle="The exact prompt and context payload sent to Gemini on each live debate. Shown here for inspection.">
       <div className="grid lg:grid-cols-3 gap-3">
         <CollapsibleCard title="SYSTEM PROMPT" subtitle={`${bundle.systemPrompt.length} chars`} body={bundle.systemPrompt} />
         <CollapsibleCard title="USER PROMPT" subtitle={`${bundle.userPrompt.split("\n").length} lines`} body={bundle.userPrompt} />
@@ -1286,7 +1322,7 @@ function PromptBuilderInspector({ bundle }: { bundle: ExecutivePromptBundle }) {
 
 function AgentPromptGeneration({ prompts }: { prompts: AgentPromptObject[] }) {
   return (
-    <Section icon={<Layers className="h-4 w-4" />} label="13" title="Agent Prompt Generation" subtitle="Per-agent prompt objects produced for every persona. Verify quality before connecting a model.">
+    <Section icon={<Layers className="h-4 w-4" />} label="13" title="Agent Prompt Generation" subtitle="Per-agent prompt objects produced for every persona and sent to Gemini during a live debate.">
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
         {prompts.map((p) => (
           <div key={p.role} className="executive-card rounded-xl overflow-hidden">
@@ -1309,7 +1345,7 @@ function AgentContractsPanel() {
   const contracts = useMemo(() => listAgentContracts(), []);
   const validations = useMemo(() => validateAllContracts(), []);
   return (
-    <Section icon={<ShieldCheck className="h-4 w-4" />} label="13.5" title="Agent Contracts" subtitle="Production-grade reasoning contracts. Each persona binds decision rules, must-consider fields, allowed stances, and a strict response schema for any future LLM.">
+    <Section icon={<ShieldCheck className="h-4 w-4" />} label="13.5" title="Agent Contracts" subtitle="Production-grade reasoning contracts. Each persona binds decision rules, must-consider fields, allowed stances, and a strict response schema enforced on every Gemini response.">
       <div className="grid lg:grid-cols-3 gap-2 mb-4">
         <div className="executive-card-elevated rounded-xl p-4 lg:col-span-1">
           <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground mb-2">Contract Completeness</p>
@@ -1757,7 +1793,7 @@ function ProviderReadinessPanel({
     { label: "Gemini Connected", on: !!geminiStatus?.connected },
   ];
   return (
-    <Section icon={<Plug className="h-4 w-4" />} label="16" title="Provider Readiness" subtitle="LLM providers ExecutiveOS is wired to support. CEO agent runs against Gemini in real time; other providers remain architectural.">
+    <Section icon={<Plug className="h-4 w-4" />} label="16" title="Provider Readiness" subtitle="The LLM provider ExecutiveOS runs against. The board agents execute against Gemini in real time via the server-side GEMINI_API_KEY.">
       <div className="grid md:grid-cols-3 gap-3 mb-3">
         {PROVIDERS.map((p) => {
           const isGemini = p.id === "gemini";

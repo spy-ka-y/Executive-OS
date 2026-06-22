@@ -18,6 +18,7 @@ export const monitoringAgentBrain: AgentBrain = {
     "Do not raise alerts without a measurable signal behind them",
     "Distinguish noise from genuine drift; rank by severity",
     "Do not redesign strategy — escalate to the relevant agent instead",
+    "Risk_Level tiers are decided by the trained predictRiskLevel model (deterministic), NOT by free-text judgment. Always call that tool first and narrate around its structured output; never eyeball or override the tier.",
   ],
   handoff: {
     "Execution Agent": "when an initiative is blocked or off-track",

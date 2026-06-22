@@ -1,0 +1,10 @@
+# Python deps for the ExecutiveOS risk-model pipeline (training/export only —
+# NOT needed at app runtime; the app runs the exported ONNX via onnxruntime-node).
+# Install:  py -m pip install -r ml/requirements.txt
+numpy==2.4.3
+pandas==3.0.3
+scikit-learn==1.9.0
+openpyxl==3.1.5
+joblib==1.5.3
+skl2onnx==1.20.0
+onnx==1.22.0

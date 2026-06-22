@@ -1,0 +1,65 @@
+{
+  "date_origin": "2024-01-01",
+  "numeric": [
+    "Marketing_Spend",
+    "Customers",
+    "Churn_%"
+  ],
+  "cat_cols": [
+    "Region",
+    "Category",
+    "Business_Unit"
+  ],
+  "vocab": {
+    "Region": [
+      "APAC",
+      "Europe",
+      "LATAM",
+      "Middle East",
+      "North America"
+    ],
+    "Category": [
+      "Beauty",
+      "Clothing",
+      "Electronics",
+      "Home",
+      "Sports"
+    ],
+    "Business_Unit": [
+      "Direct",
+      "Enterprise",
+      "Marketplace",
+      "Retail"
+    ]
+  },
+  "feature_names": [
+    "Marketing_Spend",
+    "Customers",
+    "Churn_%",
+    "days_since_origin",
+    "month",
+    "day_of_year",
+    "Region=APAC",
+    "Region=Europe",
+    "Region=LATAM",
+    "Region=Middle East",
+    "Region=North America",
+    "Category=Beauty",
+    "Category=Clothing",
+    "Category=Electronics",
+    "Category=Home",
+    "Category=Sports",
+    "Business_Unit=Direct",
+    "Business_Unit=Enterprise",
+    "Business_Unit=Marketplace",
+    "Business_Unit=Retail"
+  ],
+  "n_features": 20,
+  "target": "Revenue",
+  "model": "GradientBoostingRegressor",
+  "validation_mape": 0.0295,
+  "validation_accuracy": 0.9705,
+  "rel_resid_std": 0.0389,
+  "onnx_output": "variable",
+  "onnx_input": "input"
+}

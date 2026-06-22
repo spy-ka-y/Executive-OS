@@ -14,6 +14,7 @@ export interface Dataset {
   id: string;
   name: string;
   source_filename: string | null;
+  source_url?: string | null;
   row_count: number;
   column_count: number;
   schema: DatasetColumn[];
@@ -48,6 +49,18 @@ export interface ForecastPoint {
 export interface Forecast {
   horizon: number;
   series: ForecastPoint[];
+  /** Backtested mean absolute % error on the user's own series (null if N/A). */
+  mape?: number | null;
+  /** Qualitative trend-fit strength so the UI can flag weak/low-confidence forecasts. */
+  fitStrength?: "strong" | "moderate" | "weak" | "insufficient";
+  r2?: number;
+}
+
+// How a generated artifact was produced, so the UI never passes off a built-in
+// template as live AI output. `reason` explains a fallback (rate limit, no key…).
+export interface GenerationMeta {
+  source: "ai" | "builtin";
+  reason?: "rate_limit" | "missing_key" | "schema_invalid" | "unavailable" | "budget";
 }
 
 export type CopilotAgent = "CEO Agent" | "Consultant Agent" | "Forecast Agent" | "Decision Agent" | "Boardroom Agent";
@@ -69,6 +82,7 @@ export interface CeoBrief {
   priorities: Array<{ title: string; owner: string; due: string }>;
   forecast_highlights: Array<{ label: string; value: string }>;
   health_score: number; // 0-100
+  meta?: GenerationMeta;
   created_at?: string;
 }
 
@@ -108,6 +122,7 @@ export interface ConsultantReport {
   roi_score: number;    // Execution Difficulty (lower = easier)
   risk_score: number;   // Strategic Risk
   investment_thesis?: ConsultantInvestmentThesis | null;
+  meta?: GenerationMeta;
   created_at?: string;
 }
 
@@ -174,6 +189,8 @@ export interface GeneratedReport {
 
 export type DecisionStatus = "Not Started" | "In Progress" | "Completed" | "Blocked";
 export type DecisionRiskLevel = "Low" | "Medium" | "High";
+// How a decision actually turned out, recorded after the fact for the hit-rate.
+export type DecisionOutcome = "win" | "loss" | "mixed";
 
 export interface ExecutiveDecision {
   id: string;
@@ -192,6 +209,10 @@ export interface ExecutiveDecision {
   status: DecisionStatus;
   progress: number;
   due_date: string | null;
+  outcome?: DecisionOutcome | null;
+  actual_value?: number | null;
+  outcome_notes?: string | null;
+  outcome_at?: string | null;
   created_at: string;
   updated_at: string;
 }

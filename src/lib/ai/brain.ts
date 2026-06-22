@@ -14,6 +14,8 @@ import {
   type BrainError,
 } from "@/lib/agents/executeBrain.functions";
 import { intelligenceBriefText, type BusinessIntelligence } from "@/lib/api/intelligence";
+import { capabilitySummaryText } from "@/lib/api/capability";
+import { industryGroundingText, type IndustryProfile } from "@/lib/api/industry";
 import type { KpiSummary, ChatMessage } from "@/lib/api/types";
 import { chatSystemPrompt } from "@/lib/agents/brains/chat-brain";
 import { ceoAgentSystemPrompt } from "@/lib/agents/brains/ceo-agent";
@@ -58,6 +60,8 @@ export function brainErrorMessage(error: BrainError): string {
       return "The AI brain is not configured (no API key on the server). Showing the built-in analysis instead.";
     case "rate_limit":
       return "The AI brain is rate-limited right now. Please try again in a moment.";
+    case "budget_exceeded":
+      return "The daily live-AI call budget for this server is spent. Showing the built-in analysis; it resets tomorrow.";
     case "empty_response":
       return "The AI brain returned an empty answer. Please try rephrasing.";
     case "invalid_json":
@@ -74,11 +78,25 @@ export function brainErrorMessage(error: BrainError): string {
 export function groundingBlock(
   intel: BusinessIntelligence | null,
   kpis: KpiSummary | null,
+  profile?: IndustryProfile | null,
 ): string {
   if (!intel && !kpis)
     return "No dataset is loaded. Reason from general executive best practice and say so.";
   const parts: string[] = [];
+  if (profile) parts.push(industryGroundingText(profile));
   if (intel) parts.push("BUSINESS INTELLIGENCE:\n" + intelligenceBriefText(intel));
+  if (intel) parts.push("DATA CAPABILITY (only quantify what is computable; never invent figures for the rest):\n" + capabilitySummaryText(intel.capability));
+  if (intel?.trend) {
+    const t = intel.trend;
+    const fcParts = [
+      `Revenue trend: ${t.direction} (slope ${t.slope.toFixed(0)}/period, R² ${t.r2.toFixed(2)}, p ${t.pValue.toFixed(3)}, fit ${t.strength}).`,
+    ];
+    if (intel.forecast?.backtestMape != null)
+      fcParts.push(`Forecast backtest error on this series: ${intel.forecast.backtestMape}% MAPE.`);
+    if (t.strength === "weak" || t.strength === "insufficient")
+      fcParts.push("The trend is NOT statistically reliable — hedge any forward claim accordingly.");
+    parts.push("STATISTICAL FIT:\n" + fcParts.join(" "));
+  }
   if (kpis?.metrics?.length) {
     parts.push(
       "KPIs:\n" +
@@ -113,13 +131,14 @@ export function buildChatPrompt(params: {
   intel: BusinessIntelligence | null;
   kpis: KpiSummary | null;
   history: ChatMessage[];
+  profile?: IndustryProfile | null;
 }): { system: string; user: string } {
   const recent = params.history
     .slice(-6)
     .map((m) => `${m.role === "user" ? "Executive" : "Copilot"}: ${m.content}`)
     .join("\n");
   const user = [
-    groundingBlock(params.intel, params.kpis),
+    groundingBlock(params.intel, params.kpis, params.profile),
     recent ? `\nCONVERSATION SO FAR:\n${recent}` : "",
     `\nEXECUTIVE QUESTION:\n${params.question}`,
   ]
@@ -138,8 +157,8 @@ const CEO_BRIEF_SYSTEM = [
   "Provide 3-5 risks, 2-4 opportunities, 3-5 priorities, 3-4 forecast_highlights. Owners are executive roles (CEO/CFO/COO/CMO/CRO). Due values like '14d','30d','60d'. Ground all claims in the data.",
 ].join("\n");
 
-export function buildCeoBriefPrompt(intel: BusinessIntelligence | null, kpis: KpiSummary | null) {
-  return { system: CEO_BRIEF_SYSTEM, user: groundingBlock(intel, kpis) };
+export function buildCeoBriefPrompt(intel: BusinessIntelligence | null, kpis: KpiSummary | null, profile?: IndustryProfile | null) {
+  return { system: CEO_BRIEF_SYSTEM, user: groundingBlock(intel, kpis, profile) };
 }
 
 // Consultant Report (structured JSON) — grounded in the Consultant Agent brain.
@@ -151,8 +170,8 @@ const CONSULTANT_SYSTEM = [
   "Provide 4-7 problems and 4-6 recommendations. impact_score = growth potential, roi_score = execution difficulty, risk_score = strategic risk. Ground every figure in the data.",
 ].join("\n");
 
-export function buildConsultantPrompt(intel: BusinessIntelligence | null, kpis: KpiSummary | null) {
-  return { system: CONSULTANT_SYSTEM, user: groundingBlock(intel, kpis) };
+export function buildConsultantPrompt(intel: BusinessIntelligence | null, kpis: KpiSummary | null, profile?: IndustryProfile | null) {
+  return { system: CONSULTANT_SYSTEM, user: groundingBlock(intel, kpis, profile) };
 }
 
 // Boardroom agent (structured JSON per AgentResponseSchema)

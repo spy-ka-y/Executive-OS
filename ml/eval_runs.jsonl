@@ -1,0 +1,1 @@
+{"model_name": "forecast_revenue_gbr", "run_date": "2026-06-20T12:16:21.661739+00:00", "accuracy": 0.9705, "metric_type": "1-MAPE", "notes": "n=1500 rmse=27609 mape=0.0295 held-out test"}

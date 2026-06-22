@@ -5,6 +5,7 @@
 // over the same source of truth.
 import type { BusinessIntelligence } from "./intelligence";
 import { formatMoney as fmtMoney, formatPct as fmtPct } from "./intelligence";
+import { revenueUpsideBand } from "./estimates";
 import type { KpiSummary, SimulationScenario } from "./types";
 
 export type Priority = "Critical" | "High" | "Medium" | "Low";
@@ -116,7 +117,7 @@ export function deriveObjectives(intel: BusinessIntelligence | null, kpis: KpiSu
     owner: "CRO",
     progress: 45,
     status: "In Progress",
-    impact: `+${fmtMoney(rev * 0.1)} Revenue`,
+    impact: (() => { const b = revenueUpsideBand(intel, rev); return b.computable ? `${b.display} Revenue` : "Add date column for upside"; })(),
   });
 
   if (intel.marginPct < 25) {
@@ -128,7 +129,7 @@ export function deriveObjectives(intel: BusinessIntelligence | null, kpis: KpiSu
       owner: "CFO",
       progress: 20,
       status: "Planned",
-      impact: `+${fmtPct(intel.marginPct < 15 ? 3 : 2)} Margin`,
+      impact: "Higher blended margin",
     });
   }
 
@@ -141,7 +142,7 @@ export function deriveObjectives(intel: BusinessIntelligence | null, kpis: KpiSu
       owner: "CEO",
       progress: 15,
       status: "Planned",
-      impact: `Risk ↓ 30%`,
+      impact: "Lower concentration risk",
     });
   }
 
@@ -155,7 +156,7 @@ export function deriveObjectives(intel: BusinessIntelligence | null, kpis: KpiSu
       owner: "COO",
       progress: 10,
       status: "Backlog",
-      impact: `+${fmtMoney(gap * 0.25)} Recoverable`,
+      impact: `+${fmtMoney(Math.max(0, intel.bestRegion.total * 0.6 - intel.worstRegion.total))} Recoverable`,
     });
   }
 
@@ -236,6 +237,15 @@ export function deriveInitiatives(intel: BusinessIntelligence | null, kpis: KpiS
   if (!intel) return [];
   const rev = intel.totalRevenue;
   const marginRatio = Math.max(0.02, intel.marginPct / 100);
+  // Impact estimates are grounded in the firm's OWN realized growth band rather
+  // than a fixed coefficient: a fast-growing business surfaces larger upside
+  // than a flat one. `upsideScale` rescales the per-lever weights relative to
+  // the legacy 8% anchor; when there is no usable time series we fall back to a
+  // conservative 0.6 and the UI discloses the figures are estimates.
+  const realizedMidPct = intel.upsideBandPct
+    ? (intel.upsideBandPct.low + intel.upsideBandPct.high) / 2
+    : null;
+  const upsideScale = realizedMidPct !== null ? clamp(realizedMidPct / 8, 0.25, 2.5) : 0.6;
   const c = intel.bestCategory;
   const r = intel.bestRegion;
   const wc = intel.worstCategory;
@@ -497,6 +507,12 @@ export function deriveInitiatives(intel: BusinessIntelligence | null, kpis: KpiS
     });
   }
 
+  // Ground every dollar impact in the firm's realized growth (see upsideScale).
+  for (const i of out) {
+    i.revenueImpact = Math.round(i.revenueImpact * upsideScale);
+    i.profitImpact = Math.round(i.profitImpact * upsideScale);
+  }
+
   // --- Auto re-rank ------------------------------------------------------
   // Composite rank: impact + confidence + (risk urgency for risk-bearing).
   out.sort((a, b) => {
@@ -663,7 +679,10 @@ export function buildAgentConsensus(intel: BusinessIntelligence | null): {
     (recs.reduce((a, b) => a + stanceScore(b.stance) * (b.confidence / 100), 0) / recs.length) * 100,
   );
   const consensusRecommendation = `Approve a focused 90-day program to scale ${focus} with capped opex, ring-fenced margin guardrails${intel.categoryConcentrationPct >= 45 ? `, and a parallel diversification track` : ""}.`;
-  const expectedOutcome = `+${fmtMoney(intel.totalRevenue * 0.08)} to +${fmtMoney(intel.totalRevenue * 0.14)} revenue over 2 quarters; margin +100–200 bps; concentration trending toward target.`;
+  const outcomeBand = revenueUpsideBand(intel, intel.totalRevenue);
+  const expectedOutcome = outcomeBand.computable
+    ? `${outcomeBand.display} revenue over the next equivalent period (based on your realized growth); concentration trending toward target.`
+    : "Add a date column so the revenue outcome can be derived from your trend; concentration trending toward target.";
   return { recs, consensusScore, consensusRecommendation, expectedOutcome };
 }
 
@@ -940,7 +959,10 @@ export function executiveDebate(
   const action = boardAction(theme, { focus, s, consensusScore, intel: intel ?? null });
   const owner = ownerFor(theme);
   const timeline = timelineFor(theme);
-  const upside = scenarioActive ? revenueDelta : rev * (0.06 + Math.max(0, baseGrowth) * 0.004);
+  // Non-scenario baseline upside is grounded in the firm's realized growth band
+  // (midpoint), not a fixed coefficient; falls back conservatively if no series.
+  const realizedMid = intel?.upsideBandPct ? (intel.upsideBandPct.low + intel.upsideBandPct.high) / 2 / 100 : null;
+  const upside = scenarioActive ? revenueDelta : rev * (realizedMid ?? 0.04);
   const profitUp = scenarioActive ? projProfit : upside * (baseMargin / 100);
 
   const decision: BoardDecision = {

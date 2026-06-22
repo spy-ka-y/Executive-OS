@@ -87,9 +87,9 @@ export function exportPdf(content: ReportContent): Blob {
       startY: 80,
       head: [["Score", "Value"]],
       body: [
-        ["Impact", `${content.consultant.impact_score}/100`],
-        ["ROI", `${content.consultant.roi_score}/100`],
-        ["Risk", `${content.consultant.risk_score}/100`],
+        ["Growth Potential", `${content.consultant.impact_score}/100`],
+        ["Execution Difficulty", `${content.consultant.roi_score}/100`],
+        ["Strategic Risk", `${content.consultant.risk_score}/100`],
       ],
       headStyles: { fillColor: `#${RUBINE}` },
     });
@@ -176,7 +176,7 @@ export async function exportPptx(content: ReportContent): Promise<Blob> {
     s.background = { color: TAMARIND };
     s.addText("Consultant Report", { x: 0.5, y: 0.3, fontSize: 28, color: "F0E6D2", bold: true, fontFace: "Georgia" });
     s.addText(
-      `Impact ${content.consultant.impact_score} • ROI ${content.consultant.roi_score} • Risk ${content.consultant.risk_score}`,
+      `Growth Potential ${content.consultant.impact_score} • Execution Difficulty ${content.consultant.roi_score} • Strategic Risk ${content.consultant.risk_score}`,
       { x: 0.5, y: 1.1, fontSize: 16, color: CAMEL },
     );
     s.addTable(

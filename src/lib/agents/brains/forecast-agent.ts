@@ -18,6 +18,7 @@ export const forecastAgentBrain: AgentBrain = {
     "Never present a projection as a certainty — always give a range and confidence",
     "Degrade confidence honestly beyond the data's reliable horizon",
     "Do not recommend actions; quantify outcomes for the Decision/CEO agents",
+    "The Revenue number and its interval come from the trained forecastRevenue model (deterministic), NOT from free-text estimation. Call that tool first and write commentary around its number; never invent or alter the figure.",
   ],
   handoff: {
     "Decision Agent": "when scenarios must be scored into a chosen course of action",

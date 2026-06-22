@@ -1,7 +1,7 @@
-// LLM Provider Registry — declares the providers the orchestrator is wired
-// to support. Connection status is read-only metadata; no API calls happen
-// here. When a provider is connected in a later phase, flip `connected`.
-export type ProviderId = "openai" | "claude" | "gemini";
+// LLM Provider Registry — the providers ExecutiveOS actually runs against.
+// Only Gemini is wired and used (see lib/ai/gemini.server.ts). Live connection
+// status is fetched at runtime from the server, not declared here.
+export type ProviderId = "gemini";
 
 export interface ProviderInfo {
   id: ProviderId;
@@ -14,28 +14,12 @@ export interface ProviderInfo {
 
 export const PROVIDERS: ProviderInfo[] = [
   {
-    id: "openai",
-    label: "OpenAI",
-    vendor: "OpenAI",
-    defaultModel: "gpt-4o",
-    connected: false,
-    notes: "Architecture compatible. No API key configured.",
-  },
-  {
-    id: "claude",
-    label: "Claude",
-    vendor: "Anthropic",
-    defaultModel: "claude-sonnet-4",
-    connected: false,
-    notes: "Architecture compatible. No API key configured.",
-  },
-  {
     id: "gemini",
     label: "Gemini",
     vendor: "Google",
-    defaultModel: "gemini-2.0-flash",
-    connected: false,
-    notes: "Architecture compatible. No API key configured.",
+    defaultModel: "gemini-2.5-flash",
+    connected: false, // resolved live at runtime from the server status
+    notes: "Live provider. Runs the AI agents via the server-side GEMINI_API_KEY.",
   },
 ];
 

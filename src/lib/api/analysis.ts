@@ -9,6 +9,7 @@ import type {
   KpiMetric,
   KpiSummary,
 } from "./types";
+import { forecastSeries } from "./statistics";
 
 const REVENUE_KEYS = ["revenue", "sales", "amount", "gross", "income", "total"];
 const PROFIT_KEYS = ["profit", "net_income", "net", "margin_value", "earnings"];
@@ -132,26 +133,19 @@ export function forecastRevenue(series: Array<{ label: string; revenue: number }
   }));
   if (series.length < 2) return { horizon, series: points };
 
-  // Simple linear regression.
-  const xs = series.map((_, i) => i);
-  const ys = series.map((p) => p.revenue);
-  const xm = mean(xs);
-  const ym = mean(ys);
-  const slope = sum(xs.map((x, i) => (x - xm) * (ys[i] - ym))) / (sum(xs.map((x) => (x - xm) ** 2)) || 1);
-  const intercept = ym - slope * xm;
-  const resid = ys.map((y, i) => y - (slope * xs[i] + intercept));
-  const sigma = std(resid);
-
-  for (let h = 1; h <= horizon; h++) {
-    const x = xs.length + h - 1;
-    const y = slope * x + intercept;
+  // Delegate to the shared statistics engine so the dashboard forecast uses the
+  // SAME rigorous method everywhere: OLS trend + seasonality, residual-based
+  // prediction intervals, and a backtest on the user's own series.
+  const fc = forecastSeries(series.map((p) => p.revenue), horizon);
+  for (let h = 0; h < fc.points.length; h++) {
+    const pt = fc.points[h];
     points.push({
-      label: `+${h}`,
-      value: Math.max(0, y),
-      lower: Math.max(0, y - 1.96 * sigma),
-      upper: Math.max(0, y + 1.96 * sigma),
+      label: `+${h + 1}`,
+      value: Math.max(0, pt.value),
+      lower: Math.max(0, pt.lower),
+      upper: Math.max(0, pt.upper),
       projected: true,
     });
   }
-  return { horizon, series: points };
+  return { horizon, series: points, mape: fc.backtestMape, fitStrength: fc.fit.strength, r2: fc.fit.r2 };
 }

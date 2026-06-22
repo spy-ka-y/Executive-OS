@@ -359,6 +359,7 @@ function MissionControlPage() {
             <ScoreRing value={consensus.consensusScore} label="Consensus" size={140} tone="success" />
             <p className="text-sm text-muted-foreground mt-4 leading-relaxed">{consensus.consensusRecommendation}</p>
             <p className="text-xs text-secondary mt-3 font-medium">{consensus.expectedOutcome}</p>
+            <p className="text-[10px] text-muted-foreground mt-2">Illustrative estimate, revenue-scaled, not a modeled prediction.</p>
           </div>
           <div className="lg:col-span-2 space-y-3">
             {consensus.recs.map((r) => (

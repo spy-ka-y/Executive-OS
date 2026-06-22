@@ -19,6 +19,7 @@ import {
   Trash2,
   Database,
   Upload,
+  Gauge,
 } from "lucide-react";
 import {
   Sidebar,
@@ -36,11 +37,13 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { listDatasets, deleteDataset, createDataset, getDatasetRows } from "@/lib/api/datasets";
+import { listDatasets, deleteDataset, createDataset, getDatasetRows, importDatasetFromUrl } from "@/lib/api/datasets";
 import { computeKpis, forecastRevenue } from "@/lib/api/analysis";
 import { saveForecast, saveKpiSummary } from "@/lib/api/persistence";
 import type { DatasetRow } from "@/lib/api/types";
 import { useActiveDataset } from "@/lib/dataset-context";
+import { useIndustry } from "@/lib/industry-context";
+import { INDUSTRY_PROFILES, type IndustryId } from "@/lib/api/industry";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -102,12 +105,19 @@ const groups = [
       { title: "Reports", url: "/reports", icon: FileBarChart },
     ],
   },
+  {
+    label: "Evaluation",
+    items: [
+      { title: "Model Accuracy", url: "/accuracy", icon: Gauge },
+    ],
+  },
 ] as const;
 
 export function AppSidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const qc = useQueryClient();
   const { activeDatasetId, setActiveDatasetId } = useActiveDataset();
+  const { industryId, setIndustryId } = useIndustry();
   const { data: datasets = [] } = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
   const onDashboard = pathname === "/";
   const inputRef = useRef<HTMLInputElement>(null);
@@ -139,6 +149,26 @@ export function AppSidebar() {
       toast.success(`Uploaded ${ds.name} (${parsed.length.toLocaleString()} rows)`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleImportUrl() {
+    const url = typeof window !== "undefined" ? window.prompt("Paste a public CSV link or a Google Sheet URL (published to the web):") : null;
+    if (!url || !url.trim()) return;
+    setUploading(true);
+    try {
+      const ds = await importDatasetFromUrl({ url: url.trim() });
+      const freshRows = await getDatasetRows(ds.id);
+      const summary = computeKpis(freshRows, ds.schema);
+      await saveKpiSummary(ds.id, summary);
+      await saveForecast(ds.id, forecastRevenue(summary.series, 6));
+      setActiveDatasetId(ds.id);
+      await qc.invalidateQueries({ queryKey: ["datasets"] });
+      toast.success(`Imported ${ds.name} (${ds.row_count.toLocaleString()} rows)`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Import failed");
     } finally {
       setUploading(false);
     }
@@ -257,6 +287,25 @@ export function AppSidebar() {
 
       {/* Prominent dataset management, bottom left */}
       <SidebarFooter className="px-3 pb-5 group-data-[collapsible=icon]:hidden">
+        {/* Industry calibration — tunes thresholds and AI framing to the business type */}
+        <div className="rounded-xl border border-sidebar-border bg-white/5 p-3 mb-2">
+          <label className="block text-[11px] uppercase tracking-[0.2em] text-sidebar-accent-foreground font-medium mb-2 px-1">
+            Industry
+          </label>
+          <select
+            value={industryId}
+            onChange={(e) => setIndustryId(e.target.value as IndustryId)}
+            className="w-full h-9 rounded-lg bg-white/5 border border-sidebar-border text-[12px] text-sidebar-foreground px-2 outline-none focus:border-[var(--color-rose)]/50"
+          >
+            {Object.values(INDUSTRY_PROFILES).map((p) => (
+              <option key={p.id} value={p.id} className="bg-background text-foreground">{p.label}</option>
+            ))}
+          </select>
+          <p className="text-[10px] text-sidebar-foreground/50 mt-1.5 px-1 leading-relaxed">
+            Calibrates margin/growth thresholds and AI framing to your sector.
+          </p>
+        </div>
+
         <div className="rounded-xl border border-sidebar-border bg-white/5 p-3">
           <div className="flex items-center gap-2 mb-2.5 px-1">
             <Database className="h-3.5 w-3.5 text-[var(--color-rose)]" />
@@ -278,10 +327,18 @@ export function AppSidebar() {
           <button
             onClick={() => inputRef.current?.click()}
             disabled={uploading}
-            className="w-full flex items-center justify-center gap-2 h-9 rounded-lg bg-[var(--color-rose)]/20 border border-[var(--color-rose)]/40 text-sidebar-accent-foreground text-[12px] font-medium hover:bg-[var(--color-rose)]/30 transition-colors disabled:opacity-50 mb-2.5"
+            className="w-full flex items-center justify-center gap-2 h-9 rounded-lg bg-[var(--color-rose)]/20 border border-[var(--color-rose)]/40 text-sidebar-accent-foreground text-[12px] font-medium hover:bg-[var(--color-rose)]/30 transition-colors disabled:opacity-50 mb-1.5"
           >
             <Upload className="h-3.5 w-3.5" />
-            {uploading ? "Uploading…" : "Upload dataset"}
+            {uploading ? "Working…" : "Upload dataset"}
+          </button>
+          <button
+            onClick={handleImportUrl}
+            disabled={uploading}
+            className="w-full flex items-center justify-center gap-2 h-8 rounded-lg border border-sidebar-border text-sidebar-foreground/80 text-[11px] font-medium hover:text-sidebar-foreground hover:border-sidebar-foreground/30 transition-colors disabled:opacity-50 mb-2.5"
+          >
+            <Database className="h-3 w-3" />
+            Import from URL / Google Sheet
           </button>
 
           {datasets.length === 0 ? (

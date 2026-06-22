@@ -53,6 +53,7 @@ export const executeBrain = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<BrainResult> => {
     const { executeGeminiPrompt, executeGeminiText, isGeminiConfigured, GeminiError } =
       await import("@/lib/ai/gemini.server");
+    const cost = await import("@/lib/ai/cost-control.server");
 
     if (!isGeminiConfigured()) {
       return {
@@ -61,14 +62,31 @@ export const executeBrain = createServerFn({ method: "POST" })
       };
     }
 
+    const model = data.model ?? cost.defaultModel();
+
+    // 1) Serve identical prompts from cache (no model call, no cost).
+    const key = cost.cacheKey({ section: data.section, json: data.json, model, system: data.system, user: data.user });
+    const cached = cost.getCached<BrainResult>(key);
+    if (cached) return cached;
+
+    // 2) Stop once the daily live-call budget is spent — the caller falls back
+    //    to the built-in engine and shows the honest "built-in" banner.
+    if (cost.isOverBudget()) {
+      return {
+        ok: false,
+        error: {
+          code: "budget_exceeded",
+          message:
+            "Daily live-AI call budget reached for this server. Showing built-in analysis; it resets tomorrow, or raise LLM_DAILY_CALL_BUDGET.",
+        },
+      };
+    }
+
     try {
       if (data.json) {
-        const res = await executeGeminiPrompt({
-          system: data.system,
-          user: data.user,
-          model: data.model,
-        });
-        return {
+        const res = await executeGeminiPrompt({ system: data.system, user: data.user, model });
+        cost.recordCall(res.promptTokens, res.responseTokens);
+        const result: BrainResult = {
           ok: true,
           text: res.raw,
           parsed: (res.parsed ?? null) as JsonValue | null,
@@ -81,13 +99,12 @@ export const executeBrain = createServerFn({ method: "POST" })
             totalTokens: res.totalTokens,
           },
         };
+        cost.setCached(key, result);
+        return result;
       }
-      const res = await executeGeminiText({
-        system: data.system,
-        user: data.user,
-        model: data.model,
-      });
-      return {
+      const res = await executeGeminiText({ system: data.system, user: data.user, model });
+      cost.recordCall(res.promptTokens, res.responseTokens);
+      const result: BrainResult = {
         ok: true,
         text: res.text,
         parsed: null,
@@ -100,6 +117,8 @@ export const executeBrain = createServerFn({ method: "POST" })
           totalTokens: res.totalTokens,
         },
       };
+      cost.setCached(key, result);
+      return result;
     } catch (e) {
       if (e instanceof GeminiError) {
         return { ok: false, error: { code: e.code, message: e.message, raw: e.raw } };
@@ -111,5 +130,14 @@ export const executeBrain = createServerFn({ method: "POST" })
 
 export const getBrainStatus = createServerFn({ method: "GET" }).handler(async () => {
   const { isGeminiConfigured } = await import("@/lib/ai/gemini.server");
-  return { connected: isGeminiConfigured(), model: "gemini-2.5-flash" };
+  const { usageSnapshot, defaultModel } = await import("@/lib/ai/cost-control.server");
+  return { connected: isGeminiConfigured(), model: defaultModel() ?? "gemini-2.5-flash", usage: usageSnapshot() };
+});
+
+// On-demand live connectivity test. Actually calls Gemini and returns the real
+// outcome so the user can diagnose "why is it using built-in analysis?" after
+// deploy, instead of guessing. (Costs one tiny model call.)
+export const pingBrain = createServerFn({ method: "POST" }).handler(async () => {
+  const { pingGemini } = await import("@/lib/ai/gemini.server");
+  return pingGemini();
 });

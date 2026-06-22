@@ -12,6 +12,9 @@ import { getDataset, getDatasetRows } from "@/lib/api/datasets";
 import { computeKpis } from "@/lib/api/analysis";
 import { generateCeoBrief } from "@/lib/api/ai";
 import { latestCeoBrief, saveCeoBrief } from "@/lib/api/persistence";
+import { GenerationSourceBadge, GenerationSourceNotice } from "@/components/generation-source";
+import { useIndustry } from "@/lib/industry-context";
+import type { GenerationMeta } from "@/lib/api/types";
 
 export const Route = createFileRoute("/ceo-brief")({
   head: () => ({ meta: [{ title: "CEO Brief, ExecutiveOS" }] }),
@@ -30,7 +33,11 @@ function summaryPoints(summary: string): string[] {
 function CeoBriefPage() {
   const qc = useQueryClient();
   const { activeDatasetId } = useActiveDataset();
+  const { industryId } = useIndustry();
   const [busy, setBusy] = useState(false);
+  // Source of the most recent generation this session (DB-loaded briefs also
+  // carry meta once migrated; this guarantees an honest label immediately).
+  const [sessionMeta, setSessionMeta] = useState<GenerationMeta | undefined>(undefined);
 
   const { data: dataset } = useQuery({
     queryKey: ["dataset", activeDatasetId],
@@ -53,7 +60,8 @@ function CeoBriefPage() {
     setBusy(true);
     try {
       const kpis = computeKpis(rows, dataset.schema);
-      const next = await generateCeoBrief({ dataset_id: activeDatasetId, kpis, rows, schema: dataset.schema });
+      const next = await generateCeoBrief({ dataset_id: activeDatasetId, kpis, rows, schema: dataset.schema, industry: industryId });
+      setSessionMeta(next.meta);
       await saveCeoBrief(next);
       await qc.invalidateQueries({ queryKey: ["ceo-brief", activeDatasetId] });
       toast.success("CEO Brief regenerated");
@@ -91,6 +99,8 @@ function CeoBriefPage() {
           action={<Button onClick={regenerate} disabled={busy || !rows.length}><Sparkles className={`h-4 w-4 mr-2 ${busy ? "animate-pulse" : ""}`} /> {busy ? "Generating…" : "Generate Brief"}</Button>}
         />
       ) : (
+        <div className="space-y-6">
+        <GenerationSourceNotice meta={sessionMeta ?? brief.meta} />
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="executive-card rounded-xl p-6 lg:col-span-2">
             <div className="flex items-center justify-between mb-3 pb-3 border-b border-border/60">
@@ -101,7 +111,7 @@ function CeoBriefPage() {
                   <p className="text-xs font-medium leading-tight">CEO Agent</p>
                 </div>
               </div>
-              <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">ExecutiveOS · Executive Brief</span>
+              <GenerationSourceBadge meta={sessionMeta ?? brief.meta} />
             </div>
             <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground mb-3">Executive Summary</p>
             <ul className="space-y-2.5">
@@ -159,6 +169,7 @@ function CeoBriefPage() {
             <div className="executive-card rounded-xl p-6 flex flex-col items-center">
               <ScoreRing value={brief.health_score} label="Business Health" size={160}
                 tone={brief.health_score >= 70 ? "success" : brief.health_score >= 45 ? "warning" : "destructive"} />
+              <p className="text-[10px] text-muted-foreground text-center mt-3">Composite index of your real margin, growth, trend consistency and anomalies, a directional heuristic, not an audited score.</p>
             </div>
 
             <div className="executive-card rounded-xl p-6">
@@ -191,6 +202,7 @@ function CeoBriefPage() {
               </ul>
             </div>
           </div>
+        </div>
         </div>
       )}
     </>

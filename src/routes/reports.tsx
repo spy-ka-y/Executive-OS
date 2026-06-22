@@ -47,7 +47,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
-import { callBrain, buildReportBriefPrompt } from "@/lib/ai/brain";
+import { callBrain, buildReportBriefPrompt, brainErrorMessage } from "@/lib/ai/brain";
 import { useActiveDataset } from "@/lib/dataset-context";
 import { getDataset, getDatasetRows } from "@/lib/api/datasets";
 import { computeKpis } from "@/lib/api/analysis";
@@ -185,6 +185,7 @@ interface LocalBrief {
   title: string;
   created_at: string;
   body: string;
+  source?: "ai" | "builtin";
 }
 function readLocalBriefs(): LocalBrief[] {
   try {
@@ -562,9 +563,14 @@ function ReportsPage() {
       const { system, user } = buildReportBriefPrompt(facts);
       const res = await callBrain({ section: "report-brief", system, user });
       const narrative = res.ok && res.text.trim() ? res.text.trim() : null;
+      // Stamp provenance onto the artifact itself so the document is honest
+      // wherever it travels, not just via a transient toast.
+      const provenance = narrative
+        ? "SOURCE: Live AI narrative (Gemini), grounded in the figures below."
+        : `SOURCE: Built-in analysis (${res.ok ? "live AI returned no text" : brainErrorMessage(res.error)}). Figures derived deterministically from your data.`;
       const body = narrative
-        ? `EXECUTIVE BRIEF, ${dataset.name}\n${new Date().toLocaleString()}\n\n${narrative}\n\n- SUPPORTING DETAIL -\n${facts}`
-        : facts;
+        ? `EXECUTIVE BRIEF, ${dataset.name}\n${new Date().toLocaleString()}\n${provenance}\n\n${narrative}\n\n- SUPPORTING DETAIL -\n${facts}`
+        : `${provenance}\n\n${facts}`;
       const blob = new Blob([body], { type: "text/plain;charset=utf-8" });
       const filename = `${dataset.name.replace(/\s+/g, "_")}_brief.txt`;
       downloadBlob(blob, filename);
@@ -573,6 +579,7 @@ function ReportsPage() {
         title: `${dataset.name}, Executive Brief`,
         created_at: new Date().toISOString(),
         body,
+        source: narrative ? "ai" : "builtin",
       });
       toast.success(narrative ? "AI executive brief generated" : "Executive brief generated (built-in)");
     } catch (e) {
@@ -926,7 +933,14 @@ function ReportsPage() {
                     onClick={() => downloadBlob(new Blob([b.body], { type: "text/plain" }), `${b.title.replace(/\s+/g, "_")}.txt`)}
                     className="w-full text-left flex items-center justify-between py-2 hover:bg-muted/30 px-2 -mx-2 rounded">
                     <div>
-                      <p className="text-sm font-medium">{b.title}</p>
+                      <p className="text-sm font-medium flex items-center gap-2">
+                        {b.title}
+                        {b.source && (
+                          <span className={`text-[9px] uppercase tracking-[0.16em] px-1.5 py-0.5 rounded border ${b.source === "ai" ? "bg-secondary/15 text-secondary border-secondary/30" : "bg-warning/15 text-warning border-warning/30"}`}>
+                            {b.source === "ai" ? "Live AI" : "Built-in"}
+                          </span>
+                        )}
+                      </p>
                       <p className="text-xs text-muted-foreground">{new Date(b.created_at).toLocaleString()}</p>
                     </div>
                     <Download className="h-3 w-3 text-muted-foreground" />

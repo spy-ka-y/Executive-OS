@@ -21,6 +21,7 @@ import { Route as ChatRouteImport } from './routes/chat'
 import { Route as CeoBriefRouteImport } from './routes/ceo-brief'
 import { Route as BoardroomRouteImport } from './routes/boardroom'
 import { Route as ActionPlansRouteImport } from './routes/action-plans'
+import { Route as AccuracyRouteImport } from './routes/accuracy'
 import { Route as IndexRouteImport } from './routes/index'
 
 const TeamRoute = TeamRouteImport.update({
@@ -83,6 +84,11 @@ const ActionPlansRoute = ActionPlansRouteImport.update({
   path: '/action-plans',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AccuracyRoute = AccuracyRouteImport.update({
+  id: '/accuracy',
+  path: '/accuracy',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -91,6 +97,7 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/accuracy': typeof AccuracyRoute
   '/action-plans': typeof ActionPlansRoute
   '/boardroom': typeof BoardroomRoute
   '/ceo-brief': typeof CeoBriefRoute
@@ -106,6 +113,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/accuracy': typeof AccuracyRoute
   '/action-plans': typeof ActionPlansRoute
   '/boardroom': typeof BoardroomRoute
   '/ceo-brief': typeof CeoBriefRoute
@@ -122,6 +130,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/accuracy': typeof AccuracyRoute
   '/action-plans': typeof ActionPlansRoute
   '/boardroom': typeof BoardroomRoute
   '/ceo-brief': typeof CeoBriefRoute
@@ -139,6 +148,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/accuracy'
     | '/action-plans'
     | '/boardroom'
     | '/ceo-brief'
@@ -154,6 +164,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/accuracy'
     | '/action-plans'
     | '/boardroom'
     | '/ceo-brief'
@@ -169,6 +180,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/accuracy'
     | '/action-plans'
     | '/boardroom'
     | '/ceo-brief'
@@ -185,6 +197,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AccuracyRoute: typeof AccuracyRoute
   ActionPlansRoute: typeof ActionPlansRoute
   BoardroomRoute: typeof BoardroomRoute
   CeoBriefRoute: typeof CeoBriefRoute
@@ -285,6 +298,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ActionPlansRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/accuracy': {
+      id: '/accuracy'
+      path: '/accuracy'
+      fullPath: '/accuracy'
+      preLoaderRoute: typeof AccuracyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -297,6 +317,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AccuracyRoute: AccuracyRoute,
   ActionPlansRoute: ActionPlansRoute,
   BoardroomRoute: BoardroomRoute,
   CeoBriefRoute: CeoBriefRoute,

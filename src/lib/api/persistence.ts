@@ -45,21 +45,26 @@ export async function saveForecast(dataset_id: string, forecast: Forecast) {
 }
 
 export async function saveCeoBrief(brief: Omit<CeoBrief, "id" | "created_at">) {
-  const { data, error } = await supabase
+  const base = {
+    dataset_id: brief.dataset_id,
+    summary: brief.summary,
+    risks: brief.risks as unknown as never,
+    opportunities: brief.opportunities as unknown as never,
+    priorities: brief.priorities as unknown as never,
+    forecast_highlights: brief.forecast_highlights as unknown as never,
+    health_score: brief.health_score,
+  };
+  let res = await supabase
     .from("ceo_briefs")
-    .insert({
-      dataset_id: brief.dataset_id,
-      summary: brief.summary,
-      risks: brief.risks as unknown as never,
-      opportunities: brief.opportunities as unknown as never,
-      priorities: brief.priorities as unknown as never,
-      forecast_highlights: brief.forecast_highlights as unknown as never,
-      health_score: brief.health_score,
-    })
+    .insert({ ...base, meta: (brief.meta ?? null) as unknown as never })
     .select()
     .single();
-  if (error) throw error;
-  return data as unknown as CeoBrief;
+  // Gracefully degrade if the `meta` column hasn't been migrated yet.
+  if (res.error && /meta/i.test(res.error.message)) {
+    res = await supabase.from("ceo_briefs").insert(base).select().single();
+  }
+  if (res.error) throw res.error;
+  return res.data as unknown as CeoBrief;
 }
 
 export async function latestCeoBrief(dataset_id: string): Promise<CeoBrief | null> {
@@ -75,21 +80,25 @@ export async function latestCeoBrief(dataset_id: string): Promise<CeoBrief | nul
 }
 
 export async function saveConsultantReport(report: Omit<ConsultantReport, "id" | "created_at">) {
-  const { data, error } = await supabase
+  const base = {
+    dataset_id: report.dataset_id,
+    problems: report.problems as unknown as never,
+    recommendations: report.recommendations as unknown as never,
+    impact_score: report.impact_score,
+    roi_score: report.roi_score,
+    risk_score: report.risk_score,
+    investment_thesis: (report.investment_thesis ?? null) as unknown as never,
+  };
+  let res = await supabase
     .from("consultant_reports")
-    .insert({
-      dataset_id: report.dataset_id,
-      problems: report.problems as unknown as never,
-      recommendations: report.recommendations as unknown as never,
-      impact_score: report.impact_score,
-      roi_score: report.roi_score,
-      risk_score: report.risk_score,
-      investment_thesis: (report.investment_thesis ?? null) as unknown as never,
-    })
+    .insert({ ...base, meta: (report.meta ?? null) as unknown as never })
     .select()
     .single();
-  if (error) throw error;
-  return data as unknown as ConsultantReport;
+  if (res.error && /meta/i.test(res.error.message)) {
+    res = await supabase.from("consultant_reports").insert(base).select().single();
+  }
+  if (res.error) throw res.error;
+  return res.data as unknown as ConsultantReport;
 }
 
 export async function latestConsultantReport(dataset_id: string): Promise<ConsultantReport | null> {
@@ -281,4 +290,32 @@ export async function deleteExecutiveDecision(id: string): Promise<void> {
 export async function updateDecisionStatus(id: string, status: DecisionStatus): Promise<void> {
   const progress = status === "Completed" ? 100 : status === "In Progress" ? 50 : status === "Blocked" ? 25 : 0;
   await updateExecutiveDecision(id, { status, progress });
+}
+
+// Record how a decision actually turned out. Tolerant if the outcome columns
+// haven't been migrated yet (degrades to a no-op error the caller surfaces).
+export async function recordDecisionOutcome(
+  id: string,
+  patch: { outcome: import("./types").DecisionOutcome; actual_value?: number | null; outcome_notes?: string | null },
+): Promise<void> {
+  const { error } = await (sb.from("executive_decisions") as any)
+    .update({
+      outcome: patch.outcome,
+      actual_value: patch.actual_value ?? null,
+      outcome_notes: patch.outcome_notes ?? null,
+      outcome_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+  if (error) throw error;
+}
+
+// Real hit-rate: of decisions with a recorded outcome, the share that were wins
+// (a "mixed" counts as half). Returns null when nothing has been graded yet.
+export function computeDecisionHitRate(
+  decisions: Array<{ outcome?: ExecutiveDecision["outcome"] }>,
+): { graded: number; wins: number; hitRate: number } | null {
+  const graded = decisions.filter((d) => d.outcome === "win" || d.outcome === "loss" || d.outcome === "mixed");
+  if (!graded.length) return null;
+  const score = graded.reduce((a, d) => a + (d.outcome === "win" ? 1 : d.outcome === "mixed" ? 0.5 : 0), 0);
+  return { graded: graded.length, wins: graded.filter((d) => d.outcome === "win").length, hitRate: Math.round((score / graded.length) * 100) };
 }

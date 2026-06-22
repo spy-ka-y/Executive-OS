@@ -5,26 +5,41 @@
 // Each function below corresponds to one future endpoint. Keep the response
 // shapes stable — they are the contract.
 import type {
-  BoardroomAgent,
-  BoardroomConversation,
-  BoardroomMessage,
   CeoBrief,
   ChatMessage,
   ConsultantReport,
   ConsultantInvestmentThesis,
   CopilotAgent,
-  DecisionSimulation,
   KpiSummary,
-  SimulationScenario,
-  ActionPlan,
-  ActionInitiative,
   DatasetColumn,
   DatasetRow,
+  GenerationMeta,
 } from "./types";
 import { computeBusinessIntelligence, formatMoney as fmtMoney, formatPct as fmtPct, type BusinessIntelligence } from "./intelligence";
+import { revenueUpsideBand, shockExposure } from "./estimates";
+import { getIndustryProfile, marginVerdict, type IndustryId } from "./industry";
 import { z } from "zod";
-import { callBrain, buildChatPrompt, buildCeoBriefPrompt, buildConsultantPrompt } from "@/lib/ai/brain";
+import { callBrain, buildChatPrompt, buildCeoBriefPrompt, buildConsultantPrompt, type BrainResult } from "@/lib/ai/brain";
 import { validateChatScope, renderInvalidated } from "@/lib/agents/brains/chat-brain";
+
+// Map a failed/invalid brain result to the reason we show the user, so a
+// built-in fallback is always labeled with WHY the live AI was not used.
+function fallbackMeta(res: BrainResult | null): GenerationMeta {
+  if (!res || res.ok) return { source: "builtin", reason: "unavailable" };
+  switch (res.error.code) {
+    case "rate_limit":
+      return { source: "builtin", reason: "rate_limit" };
+    case "missing_key":
+      return { source: "builtin", reason: "missing_key" };
+    case "budget_exceeded":
+      return { source: "builtin", reason: "budget" };
+    case "invalid_json":
+    case "schema_invalid":
+      return { source: "builtin", reason: "schema_invalid" };
+    default:
+      return { source: "builtin", reason: "unavailable" };
+  }
+}
 
 const BACKEND = (import.meta.env.VITE_AI_BACKEND as string | undefined) ?? "local";
 const FASTAPI_URL = (import.meta.env.VITE_FASTAPI_URL as string | undefined) ?? "";
@@ -93,6 +108,7 @@ export async function chat(params: {
   schema?: DatasetColumn[];
   history: ChatMessage[];
   question: string;
+  industry?: IndustryId;
 }): Promise<ChatMessage> {
   // Scope gate (chat brain): off-theme questions are rejected with a structured
   // invalidated response — no model call, so it works even when quota is out.
@@ -113,7 +129,7 @@ export async function chat(params: {
   // AI brain first — real, context-aware answer grounded in the dataset.
   let brainNote = "";
   if (params.question.trim()) {
-    const { system, user } = buildChatPrompt({ question: params.question, intel, kpis: params.kpis, history: params.history });
+    const { system, user } = buildChatPrompt({ question: params.question, intel, kpis: params.kpis, history: params.history, profile: getIndustryProfile(params.industry) });
     const res = await callBrain({ section: "chat", system, user, json: false });
     if (res.ok && res.text.trim()) {
       return { id: id(), role: "assistant", content: res.text.trim(), created_at: new Date().toISOString(), agent };
@@ -123,10 +139,12 @@ export async function chat(params: {
     if (!res.ok) {
       brainNote =
         res.error.code === "rate_limit"
-          ? "> ⚠️ _Live AI is rate-limited — the Gemini free-tier quota for this key is exhausted (resets daily, or enable billing). Showing built-in analysis until it recovers._\n\n"
+          ? "> ⚠️ _Live AI is rate-limited, the Gemini free-tier quota for this key is exhausted (resets daily, or enable billing). Showing built-in analysis until it recovers._\n\n"
           : res.error.code === "missing_key"
-            ? "> ⚠️ _Live AI isn't configured — no `GEMINI_API_KEY` on the server. Showing built-in analysis._\n\n"
-            : "> ⚠️ _Live AI is temporarily unavailable. Showing built-in analysis._\n\n";
+            ? "> ⚠️ _Live AI isn't configured, no `GEMINI_API_KEY` on the server. Showing built-in analysis._\n\n"
+            : res.error.code === "budget_exceeded"
+              ? "> ⚠️ _The daily live-AI call budget for this server is spent (resets tomorrow). Showing built-in analysis._\n\n"
+              : "> ⚠️ _Live AI is temporarily unavailable. Showing built-in analysis._\n\n";
     }
   }
 
@@ -240,7 +258,7 @@ function strategicRecommendation(intel: BusinessIntelligence): string {
   return [
     `**Top Priority:** Scale ${c?.name ?? "the top category"}${r ? ` in ${r.name}` : ""}.`,
     `**Reason:** ${c ? `${c.name} already delivers ${fmtPct(intel.categoryConcentrationPct)} of ${intel.metricName.toLowerCase()} at ${fmtPct(c.margin ?? 0)} margin — strongest unit economics in the portfolio.` : `Structural strength concentrated in this segment.`} Trend is ${intel.trendDirection} at ${fmtPct(intel.growthPct)}.`,
-    `**Expected Impact:** Revenue +${fmtMoney(intel.totalRevenue * 0.08)} to +${fmtMoney(intel.totalRevenue * 0.14)} over two quarters; margin +80–180 bps.`,
+    `**Expected Impact:** ${(() => { const b = revenueUpsideBand(intel, intel.totalRevenue); return b.computable ? `Revenue ${b.display} over the next equivalent period (based on your realized growth).` : "Revenue upside is qualitative here — add a date column so I can quantify it from your trend."; })()}`,
     `**Risk Level:** ${riskLevel} — execution risk dominated by ${intel.categoryConcentrationPct >= 40 ? "increasing concentration" : "macro demand variability"}.`,
     `**Confidence Score:** ${confidence}/100.`,
     `\n_— Consultant Agent_`,
@@ -266,6 +284,7 @@ export async function generateCeoBrief(params: {
   kpis: KpiSummary;
   rows?: DatasetRow[];
   schema?: DatasetColumn[];
+  industry?: IndustryId;
 }): Promise<Omit<CeoBrief, "id" | "created_at">> {
   if (BACKEND === "fastapi") return callFastApi("/ceo-brief", params);
 
@@ -281,11 +300,12 @@ export async function generateCeoBrief(params: {
 
   // AI brain first — fall back to the heuristic below if it is unavailable or
   // returns a malformed payload.
+  let brainRes: BrainResult | null = null;
   {
-    const { system, user } = buildCeoBriefPrompt(intel, params.kpis);
-    const res = await callBrain({ section: "ceo-brief", system, user, json: true });
-    if (res.ok && res.parsed) {
-      const parsed = CeoBriefAiSchema.safeParse(res.parsed);
+    const { system, user } = buildCeoBriefPrompt(intel, params.kpis, getIndustryProfile(params.industry));
+    brainRes = await callBrain({ section: "ceo-brief", system, user, json: true });
+    if (brainRes.ok && brainRes.parsed) {
+      const parsed = CeoBriefAiSchema.safeParse(brainRes.parsed);
       if (parsed.success) {
         return {
           dataset_id: params.dataset_id,
@@ -295,6 +315,7 @@ export async function generateCeoBrief(params: {
           priorities: parsed.data.priorities.slice(0, 5),
           forecast_highlights: parsed.data.forecast_highlights.slice(0, 4),
           health_score: clamp(parsed.data.health_score),
+          meta: { source: "ai" },
         };
       }
     }
@@ -312,10 +333,12 @@ export async function generateCeoBrief(params: {
     ),
   );
 
+  const profile = getIndustryProfile(params.industry);
   const healthFactors: string[] = [];
-  if (margin >= 18) healthFactors.push(`healthy ${fmtPct(margin)} profit margin`);
-  else if (margin >= 10) healthFactors.push(`moderate ${fmtPct(margin)} margin`);
-  else healthFactors.push(`thin ${fmtPct(margin)} margin`);
+  const mv = marginVerdict(margin, profile);
+  if (mv === "healthy") healthFactors.push(`healthy ${fmtPct(margin)} profit margin for a ${profile.label.toLowerCase()}`);
+  else if (mv === "moderate") healthFactors.push(`moderate ${fmtPct(margin)} margin for a ${profile.label.toLowerCase()}`);
+  else healthFactors.push(`thin ${fmtPct(margin)} margin for a ${profile.label.toLowerCase()}`);
   if (growth >= 5) healthFactors.push(`strong ${fmtPct(growth)} revenue growth`);
   else if (growth >= 0) healthFactors.push(`flat ${fmtPct(growth)} growth`);
   else healthFactors.push(`negative ${fmtPct(growth)} growth`);
@@ -363,7 +386,7 @@ export async function generateCeoBrief(params: {
   }
   risks.push({
     title: "Margin deterioration risk",
-    description: `Current margin is ${fmtPct(margin)}. A 200 bps compression would erase ${fmtMoney(rev * 0.02)} of profit — limited absorption capacity for input cost shocks.`,
+    description: `Current margin is ${fmtPct(margin)}. Scenario: a 200 bps compression would erase ${fmtMoney(rev * 0.02)} of profit (2% of ${fmtMoney(rev)} revenue) — limited absorption capacity for input cost shocks.`,
     severity: margin < 10 ? "high" : margin < 20 ? "med" : "low",
   });
   if (intel?.worstRegion && intel.bestRegion && intel.worstRegion !== intel.bestRegion) {
@@ -384,38 +407,43 @@ export async function generateCeoBrief(params: {
 
   // Opportunities
   const opps: Omit<CeoBrief, "id" | "created_at">["opportunities"] = [];
-  if (intel?.bestCategory && intel.bestRegion) {
+  if (intel && intel.bestCategory && intel.bestRegion) {
+    const band = revenueUpsideBand(intel, intel.bestCategory.total);
     opps.push({
       title: `Expand ${intel.bestCategory.name} in ${intel.bestRegion.name}`,
       description: `${intel.bestCategory.name} already proves product-market fit; ${intel.bestRegion.name} demonstrates channel strength. Doubling down on this intersection is the highest-confidence growth move.`,
-      upside: `+${fmtMoney(intel.bestCategory.total * 0.15)} revenue`,
+      upside: band.computable ? `${band.display} revenue` : "Add a date column to quantify",
     });
-  } else if (intel?.bestCategory) {
+  } else if (intel && intel.bestCategory) {
+    const band = revenueUpsideBand(intel, intel.bestCategory.total);
     opps.push({
       title: `Scale ${intel.bestCategory.name} investment`,
       description: `${intel.bestCategory.name} contributes ${fmtPct(intel.categoryConcentrationPct)} of ${intel.metricName.toLowerCase()} — incremental marketing dollars compound fastest here.`,
-      upside: `+${fmtMoney(intel.bestCategory.total * 0.12)} revenue`,
+      upside: band.computable ? `${band.display} revenue` : "Add a date column to quantify",
     });
   }
   if (intel?.worstCategory && intel.bestCategory && intel.worstCategory !== intel.bestCategory && (intel.worstCategory.margin ?? 0) < (intel.bestCategory.margin ?? 0)) {
+    // Data-derived: closing the actual margin gap on the laggard's actual share.
+    const gap = (intel.bestCategory.margin ?? 0) - (intel.worstCategory.margin ?? 0);
+    const blendedUpliftPts = gap * intel.worstCategory.share;
     opps.push({
       title: `Improve ${intel.worstCategory.name} profitability`,
       description: `${intel.worstCategory.name} runs at ${fmtPct(intel.worstCategory.margin ?? 0)} margin vs ${fmtPct(intel.bestCategory.margin ?? 0)} for ${intel.bestCategory.name}. Restructure pricing, mix, or cost base.`,
-      upside: `+${fmtPct(1.5)} blended margin`,
+      upside: `up to +${fmtPct(blendedUpliftPts)} blended margin`,
     });
   }
   if (intel?.marketingRoi !== null && intel?.marketingRoi !== undefined && intel.marketingRoi < 5 && intel.bestCategory) {
     opps.push({
       title: "Reallocate marketing to highest-ROI category",
       description: `Blended marketing ROI is ${intel.marketingRoi.toFixed(2)}x. Concentrating spend on ${intel.bestCategory.name} should lift efficiency materially.`,
-      upside: `+${fmtMoney(rev * 0.05)} revenue`,
+      upside: "Higher marketing efficiency",
     });
   }
   if (growth >= 0) {
     opps.push({
       title: "Cross-sell to existing customers",
       description: `${intel?.bestCategory ? `Customers buying ${intel.bestCategory.name} are natural targets for adjacent SKUs.` : "Existing buyer base under-monetized on adjacencies."} Lower CAC than net-new acquisition.`,
-      upside: `+${fmtMoney(rev * 0.06)} revenue`,
+      upside: "Lower-CAC expansion revenue",
     });
   }
   if (opps.length === 0) {
@@ -443,14 +471,23 @@ export async function generateCeoBrief(params: {
   priorities.push({ title: "Refresh rolling forecast and stress-test downside", owner: "CFO", due: "14d" });
   if (priorities.length < 4) priorities.push({ title: "Quarterly board operating review", owner: "CEO", due: "30d" });
 
-  // Forecast highlights
-  const forecastNext = rev * (1 + growth / 100 / 2);
-  const forecast_highlights = [
-    { label: "Next-period revenue (mid)", value: fmtMoney(forecastNext) },
-    { label: "Implied annual run-rate", value: fmtMoney(rev * 2) },
-    { label: "Trend consistency", value: `${consistency}/100` },
-  ];
-  if (intel?.bestCategory) forecast_highlights.push({ label: `${intel.bestCategory.name} share`, value: fmtPct(intel.categoryConcentrationPct) });
+  // Forecast highlights — use the real OLS forecast with its prediction interval
+  // and backtested error when we have a usable series; otherwise stay qualitative.
+  const forecast_highlights: { label: string; value: string }[] = [];
+  if (intel?.forecast && intel.forecast.points.length) {
+    const p = intel.forecast.points[0];
+    forecast_highlights.push({ label: "Next-period revenue (modeled)", value: fmtMoney(p.value) });
+    forecast_highlights.push({ label: "95% prediction range", value: `${fmtMoney(p.lower)} to ${fmtMoney(p.upper)}` });
+    forecast_highlights.push({
+      label: "Forecast accuracy (backtest)",
+      value: intel.forecast.backtestMape != null ? `±${intel.forecast.backtestMape}% MAPE` : "not enough history",
+    });
+    forecast_highlights.push({ label: "Trend fit", value: `${intel.trend.strength} (R² ${intel.trend.r2.toFixed(2)})` });
+  } else {
+    forecast_highlights.push({ label: "Next-period revenue (mid)", value: fmtMoney(rev * (1 + growth / 100 / 2)) });
+    forecast_highlights.push({ label: "Trend consistency", value: `${consistency}/100` });
+    forecast_highlights.push({ label: "Forecast", value: "Add a date column for a modeled forecast" });
+  }
 
   return {
     dataset_id: params.dataset_id,
@@ -460,6 +497,7 @@ export async function generateCeoBrief(params: {
     priorities: priorities.slice(0, 5),
     forecast_highlights,
     health_score: health,
+    meta: fallbackMeta(brainRes),
   };
 }
 
@@ -470,6 +508,7 @@ export async function generateConsultantReport(params: {
   kpis: KpiSummary;
   rows?: DatasetRow[];
   schema?: DatasetColumn[];
+  industry?: IndustryId;
 }): Promise<Omit<ConsultantReport, "id" | "created_at">> {
   if (BACKEND === "fastapi") return callFastApi("/consultant", params);
 
@@ -485,11 +524,12 @@ export async function generateConsultantReport(params: {
       : null;
 
   // AI brain first — fall back to the heuristic findings below on any failure.
+  let brainRes: BrainResult | null = null;
   {
-    const { system, user } = buildConsultantPrompt(intel, params.kpis);
-    const res = await callBrain({ section: "consultant", system, user, json: true });
-    if (res.ok && res.parsed) {
-      const parsed = ConsultantAiSchema.safeParse(res.parsed);
+    const { system, user } = buildConsultantPrompt(intel, params.kpis, getIndustryProfile(params.industry));
+    brainRes = await callBrain({ section: "consultant", system, user, json: true });
+    if (brainRes.ok && brainRes.parsed) {
+      const parsed = ConsultantAiSchema.safeParse(brainRes.parsed);
       if (parsed.success) {
         return {
           dataset_id: params.dataset_id,
@@ -499,6 +539,7 @@ export async function generateConsultantReport(params: {
           roi_score: clamp(parsed.data.roi_score),
           risk_score: clamp(parsed.data.risk_score),
           investment_thesis: parsed.data.investment_thesis ?? null,
+          meta: { source: "ai" },
         };
       }
     }
@@ -516,7 +557,7 @@ export async function generateConsultantReport(params: {
       title: `${intel.bestRegion.name} regional concentration`,
       description: `${intel.bestRegion.name} contributes ${fmtPct(intel.regionConcentrationPct)} of ${intel.metricName.toLowerCase()} — a single-market dependency that amplifies downside if local demand softens.`,
       evidence: `${intel.bestRegion.name}: ${fmtMoney(intel.bestRegion.total)}${intel.worstRegion && intel.worstRegion !== intel.bestRegion ? ` vs ${intel.worstRegion.name}: ${fmtMoney(intel.worstRegion.total)}` : ""}.`,
-      financial_exposure: `${fmtMoney(exposure * 0.15)}–${fmtMoney(exposure * 0.3)} at risk under a 15–30% regional shock.`,
+      financial_exposure: `${shockExposure(exposure, 15, 30).display} at risk under a 15-30% regional demand shock (scenario).`,
       strategic_recommendation: `Stand up a second region playbook${intel.worstRegion ? ` starting with ${intel.worstRegion.name} unit economics` : ""}; cap ${intel.bestRegion.name} share of revenue below 50% within 3 quarters.`,
       severity: sev(intel.regionConcentrationPct),
       category: "concentration",
@@ -531,7 +572,13 @@ export async function generateConsultantReport(params: {
       title: `${c.name} dominance & portfolio imbalance`,
       description: `${c.name} drives ${fmtPct(intel.categoryConcentrationPct)} of ${intel.metricName.toLowerCase()} at ${fmtPct(c.margin ?? 0)} margin${wc && wc !== c ? `, while ${wc.name} lags at ${fmtPct((wc.share) * 100)} share and ${fmtPct(wc.margin ?? 0)} margin` : ""}. Portfolio reward is concentrated; reinvestment must follow the winner.`,
       evidence: `${c.name}: ${fmtMoney(c.total)} (${fmtPct(intel.categoryConcentrationPct)}). ${wc && wc !== c ? `${wc.name}: ${fmtMoney(wc.total)} (${fmtPct((wc.share) * 100)}).` : ""}`,
-      financial_exposure: `${fmtMoney(c.total * 0.1)} reinvestment opportunity; ${wc && wc !== c ? `${fmtMoney(wc.total * 0.2)} margin drag from ${wc.name}.` : ""}`,
+      financial_exposure: (() => {
+        const up = revenueUpsideBand(intel, c.total);
+        const reinvest = up.computable ? `${up.display} reinvestment upside on ${c.name}` : `Reinvestment upside on ${c.name} (add a date column to quantify)`;
+        // Margin drag = the profit lost by the laggard running below the leader's margin.
+        const drag = wc && wc !== c ? Math.max(0, ((c.margin ?? 0) - (wc.margin ?? 0)) / 100 * wc.total) : 0;
+        return `${reinvest}${drag > 0 ? `; ${fmtMoney(drag)} profit drag from ${wc!.name}'s margin gap.` : "."}`;
+      })(),
       strategic_recommendation: `Lock a 90-day capital plan that overweights ${c.name}${wc && wc !== c ? ` and gates ${wc.name} on a profitability turnaround` : ""}.`,
       severity: intel.categoryConcentrationPct >= 55 ? "high" : "med",
       category: "category",
@@ -545,7 +592,7 @@ export async function generateConsultantReport(params: {
       title: `${intel.worstRegion.name} go-to-market underperformance`,
       description: `${intel.worstRegion.name} delivers only ${fmtMoney(intel.worstRegion.total)} vs ${intel.bestRegion.name}'s ${fmtMoney(intel.bestRegion.total)}. Coverage, channel mix, or product fit is broken.`,
       evidence: `Performance gap: ${fmtMoney(gap)} (${fmtPct((gap / Math.max(1, intel.bestRegion.total)) * 100)} delta).`,
-      financial_exposure: `${fmtMoney(gap * 0.4)} recoverable revenue if ${intel.worstRegion.name} reaches 60% of ${intel.bestRegion.name}'s yield.`,
+      financial_exposure: `${fmtMoney(Math.max(0, intel.bestRegion.total * 0.6 - intel.worstRegion.total))} recoverable revenue if ${intel.worstRegion.name} reaches 60% of ${intel.bestRegion.name}'s revenue.`,
       strategic_recommendation: `Run a 60-day diagnostic on ${intel.worstRegion.name}: channel economics, pricing, and rep productivity. Decide reinvest vs. retreat.`,
       severity: "med",
       category: "region",
@@ -572,7 +619,7 @@ export async function generateConsultantReport(params: {
       title: "Customer concentration risk",
       description: `Top 5 customers represent ${fmtPct(intel.customerConcentrationPct)} of revenue. Loss of one materially impacts the forecast and erodes negotiating leverage.`,
       evidence: `Top buyer: ${topName} at ${fmtMoney(intel.topCustomers[0]?.total ?? 0)}. Top 5 cumulative: ${fmtMoney((intel.topCustomers.slice(0, 5).reduce((a, b) => a + b.total, 0)))}.`,
-      financial_exposure: `${fmtMoney(rev * (intel.customerConcentrationPct / 100) * 0.25)} at risk from a single top-customer churn event.`,
+      financial_exposure: `${fmtMoney(intel.topCustomers[0]?.total ?? 0)} at risk from losing the single largest customer (${topName}).`,
       strategic_recommendation: `Tier the customer base, deploy named-account executive sponsors on the top 5, and stand up a mid-market acquisition motion to dilute concentration below 30% in 4 quarters.`,
       severity: intel.customerConcentrationPct >= 50 ? "high" : "med",
       category: "customer",
@@ -588,7 +635,9 @@ export async function generateConsultantReport(params: {
         ? `Half-over-half growth is ${fmtPct(growth)} with ${intel?.trendConsistency ?? 60}/100 consistency. Momentum exists but is uneven across segments — capital is likely mis-deployed.`
         : `Half-over-half decline of ${fmtPct(growth)} indicates structural pressure on the core motion, not a one-period anomaly.`,
       evidence: `Trend direction: ${intel?.trendDirection ?? "flat"}; series consistency ${intel?.trendConsistency ?? 60}/100.`,
-      financial_exposure: growth < 0 ? `${fmtMoney(Math.abs(rev * (growth / 100)))} forward-period erosion if trajectory persists.` : `${fmtMoney(rev * Math.max(0, growth / 100) * 0.5)} of upside left on the table without active reallocation.`,
+      financial_exposure: growth < 0
+        ? `${fmtMoney(Math.abs(rev * (growth / 100)))} forward-period erosion if trajectory persists.`
+        : (() => { const b = revenueUpsideBand(intel, rev); return b.computable ? `${b.display} of upside left on the table without active reallocation.` : "Upside left on the table (add a date column to quantify)."; })(),
       strategic_recommendation: growth < 0
         ? "Freeze discretionary opex, protect margin, rebuild pipeline before reinvesting in growth experiments."
         : `Move 15–20% of marketing and sales coverage from low-yield segments into ${intel?.bestCategory?.name ?? "the top category"}${intel?.bestRegion ? ` × ${intel.bestRegion.name}` : ""}.`,
@@ -604,7 +653,7 @@ export async function generateConsultantReport(params: {
       title: "Forecast confidence degradation",
       description: `Statistical noise and trend inconsistency compound beyond a 4-period horizon, making board-level commitments fragile.`,
       evidence: `${params.kpis.anomalies.length} flagged anomalies${an ? ` (largest: ${an.label} at ${fmtMoney(an.value)})` : ""}; consistency ${intel?.trendConsistency ?? 60}/100.`,
-      financial_exposure: `±${fmtMoney(rev * 0.08)} of forward-period swing under current variance.`,
+      financial_exposure: `±${fmtMoney(rev * (100 - (intel?.trendConsistency ?? 60)) / 100)} of forward-period swing, derived from your series volatility (consistency ${intel?.trendConsistency ?? 60}/100).`,
       strategic_recommendation: "Move from periodic to a rolling 13-week forecast; instrument leading indicators (pipeline coverage, churn signal, sell-through) for monthly recalibration.",
       severity: (intel?.trendConsistency ?? 60) < 45 ? "high" : "med",
       category: "forecast",
@@ -616,14 +665,19 @@ export async function generateConsultantReport(params: {
   const bestReg = intel?.bestRegion?.name ?? "the leading region";
   const worstCat = intel?.worstCategory?.name;
   const worstReg = intel?.worstRegion?.name;
+  // Data-derived upside band for the flagship growth wedge; gated when there is
+  // no usable time series to ground it.
+  const flagshipBand = intel ? revenueUpsideBand(intel, intel.bestCategory?.total ?? rev) : null;
+  const bandRevenue = (b: typeof flagshipBand, suffix: string, fallback: string) =>
+    b && b.computable ? `${b.display}${suffix}` : fallback;
 
   recommendations.push({
     title: `Scale ${bestCat} in ${bestReg}`,
     description: `Concentrate sales coverage, inventory, and upper-funnel marketing on the proven ${bestCat} × ${bestReg} wedge.`,
     impact: 88, // growth potential
     effort: 35, // execution difficulty
-    timeframe: "60–90 days",
-    expected_revenue_impact: `+${fmtMoney(rev * 0.08)} to +${fmtMoney(rev * 0.14)}`,
+    timeframe: "60-90 days",
+    expected_revenue_impact: bandRevenue(flagshipBand, "", "Add a date column to quantify upside"),
     confidence: Math.min(92, 60 + (intel?.trendConsistency ?? 50) * 0.3),
     owner: "Chief Revenue Officer",
     strategic_risk: 22,
@@ -636,7 +690,10 @@ export async function generateConsultantReport(params: {
       impact: 62,
       effort: 55,
       timeframe: "60 days",
-      expected_revenue_impact: `+${fmtPct(1.2)}–${fmtPct(2.0)} blended margin`,
+      expected_revenue_impact: (() => {
+        const gapPts = Math.max(0, ((intel.bestCategory.margin ?? 0) - (intel.worstCategory?.margin ?? 0)) * (intel.worstCategory?.share ?? 0));
+        return gapPts > 0 ? `up to +${fmtPct(gapPts)} blended margin (closing the gap to ${bestCat})` : "Blended margin recovery";
+      })(),
       confidence: 70,
       owner: "Chief Financial Officer",
       strategic_risk: 35,
@@ -649,8 +706,8 @@ export async function generateConsultantReport(params: {
       description: `Tiered named-account model on top 5; mid-market acquisition motion to dilute top-5 share from ${fmtPct(intel.customerConcentrationPct)} → <30% in 4 quarters.`,
       impact: 70,
       effort: 65,
-      timeframe: "2–4 quarters",
-      expected_revenue_impact: `+${fmtMoney(rev * 0.06)} new-logo revenue; reduced churn exposure`,
+      timeframe: "2-4 quarters",
+      expected_revenue_impact: bandRevenue(intel ? revenueUpsideBand(intel, rev) : null, " new-logo revenue; reduced churn exposure", "Reduced churn exposure; new-logo upside (add a date column to quantify)"),
       confidence: 65,
       owner: "Chief Growth Officer",
       strategic_risk: 45,
@@ -664,7 +721,7 @@ export async function generateConsultantReport(params: {
       impact: 58,
       effort: 60,
       timeframe: "60 days",
-      expected_revenue_impact: `+${fmtMoney((intel.bestRegion.total - (intel.worstRegion?.total ?? 0)) * 0.25)} recoverable`,
+      expected_revenue_impact: `+${fmtMoney(Math.max(0, intel.bestRegion.total * 0.6 - (intel.worstRegion?.total ?? 0)))} recoverable if ${worstReg} reaches 60% of ${bestReg}'s revenue`,
       confidence: 60,
       owner: "Chief Operating Officer",
       strategic_risk: 50,
@@ -677,7 +734,7 @@ export async function generateConsultantReport(params: {
     impact: 55,
     effort: 30,
     timeframe: "30 days",
-    expected_revenue_impact: `±${fmtMoney(rev * 0.04)} forecast variance reduction`,
+    expected_revenue_impact: `±${fmtMoney(rev * (100 - (intel?.trendConsistency ?? 60)) / 100 * 0.5)} tighter forecast variance (halving current series volatility)`,
     confidence: 85,
     owner: "Chief Financial Officer",
     strategic_risk: 15,
@@ -690,7 +747,7 @@ export async function generateConsultantReport(params: {
       impact: 66,
       effort: 50,
       timeframe: "90 days",
-      expected_revenue_impact: `+${fmtPct(1.5)}–${fmtPct(3.0)} margin expansion`,
+      expected_revenue_impact: "Blended margin expansion from vendor + pricing actions",
       confidence: 72,
       owner: "Chief Financial Officer",
       strategic_risk: 30,
@@ -711,7 +768,7 @@ export async function generateConsultantReport(params: {
   // Investment thesis
   const posture: ConsultantInvestmentThesis["posture"] =
     growth >= 6 && margin >= 18 ? "Accelerate" : growth >= 0 ? "Optimize" : margin < 12 ? "Defend" : "Stabilize";
-  const upsidePct = Math.max(4, Math.min(18, 6 + growth * 0.4 + (intel?.bestCategory ? 3 : 0)));
+  const thesisBand = intel ? revenueUpsideBand(intel, rev) : null;
   const verdict =
     posture === "Accelerate"
       ? `Recommended posture: ACCELERATE. Concentrate capital on ${bestCat} × ${bestReg}, instrument the rolling forecast, and pre-fund a second growth engine. Conviction is supported by ${fmtPct(growth)} growth and ${fmtPct(margin)} margin.`
@@ -722,8 +779,10 @@ export async function generateConsultantReport(params: {
       : `Recommended posture: DEFEND. Margin and growth signals demand a defensive posture: protect cash, exit unprofitable segments, and reset the cost base before any growth initiative is funded.`;
 
   const investment_thesis: ConsultantInvestmentThesis = {
-    revenue_upside: `+${fmtPct(upsidePct)} (${fmtMoney(rev * upsidePct / 100)}) over 2 quarters if recommended initiatives execute`,
-    margin_improvement: `+${fmtPct(margin < 15 ? 2.5 : 1.5)}–${fmtPct(margin < 15 ? 4.0 : 3.0)} blended margin from mix + cost actions`,
+    revenue_upside: thesisBand && thesisBand.computable
+      ? `${thesisBand.display} over the next equivalent period if recommended initiatives execute (based on your realized growth)`
+      : "Add a date column to quantify the revenue upside",
+    margin_improvement: "Blended margin expansion from mix + cost actions",
     risk_reduction: intel
       ? `Top-category share ${fmtPct(intel.categoryConcentrationPct)} → target <40%; customer concentration ${fmtPct(intel.customerConcentrationPct)} → target <30% in 4 quarters.`
       : `Diversify revenue base and harden forecast confidence within 2 quarters.`,
@@ -739,123 +798,6 @@ export async function generateConsultantReport(params: {
     roi_score: execution_difficulty,
     risk_score: strategic_risk,
     investment_thesis,
-  };
-}
-
-
-// --- Decision Simulator ----------------------------------------------------
-export async function simulateDecision(params: {
-  dataset_id: string;
-  kpis: KpiSummary;
-  scenario: SimulationScenario;
-  name?: string;
-}): Promise<Omit<DecisionSimulation, "id" | "created_at">> {
-  if (BACKEND === "fastapi") return callFastApi("/simulate", params);
-  const rev = params.kpis.metrics.find((x) => x.key === "revenue")?.value ?? 0;
-  const margin = (params.kpis.metrics.find((x) => x.key === "margin")?.value ?? 0) / 100;
-
-  const s = params.scenario;
-  // Elasticity assumptions (heuristic).
-  const priceEffect = 1 + (s.priceChangePct / 100) * 0.85 - Math.abs(s.priceChangePct / 100) * 0.25;
-  const mktEffect = 1 + (s.marketingSpendDeltaPct / 100) * 0.35;
-  const churnEffect = 1 - (s.churnDeltaPct / 100) * 0.6;
-  const headcountCost = s.headcountDelta * 120000; // avg loaded cost
-
-  const newRev = rev * priceEffect * mktEffect * churnEffect;
-  const revenueImpact = newRev - rev;
-  const newMargin = Math.max(-0.5, margin - (s.marketingSpendDeltaPct / 100) * 0.05 + (s.priceChangePct / 100) * 0.4);
-  const profitImpact = newRev * newMargin - rev * margin - headcountCost;
-
-  const stress =
-    Math.abs(s.priceChangePct) * 1.5 +
-    Math.abs(s.marketingSpendDeltaPct) * 0.4 +
-    Math.abs(s.churnDeltaPct) * 1.2 +
-    Math.abs(s.headcountDelta) * 2;
-  const risk = Math.min(100, Math.round(15 + stress));
-  const confidence = Math.max(30, Math.min(95, Math.round(95 - stress)));
-
-  return {
-    dataset_id: params.dataset_id,
-    name: params.name ?? "Scenario",
-    scenario: s,
-    revenue_impact: Math.round(revenueImpact),
-    profit_impact: Math.round(profitImpact),
-    risk,
-    confidence,
-  };
-}
-
-// --- AI Boardroom ----------------------------------------------------------
-const AGENT_VOICE: Record<BoardroomAgent, (ctx: { topic: string; rev: number; margin: number; growth: number }) => string> = {
-  CEO: ({ topic, growth }) =>
-    `Framing: ${topic}. The board's job is to convert ${growth >= 0 ? "momentum" : "headwind"} into a clear move. I want one decision out of this discussion — not three options.`,
-  CFO: ({ rev, margin }) =>
-    `Numbers first. Revenue base is ${fmtMoney(rev)} at ${fmtPct(margin)} margin. Any move must preserve or expand that margin within two quarters — anything dilutive needs a defensible payback plan.`,
-  CMO: ({ growth }) =>
-    `Demand signal supports a bolder posture. Brand-led growth would compound the ${fmtPct(growth)} we already have. Recommend a 20% reweighting toward upper-funnel investment.`,
-  COO: () =>
-    `Operationally, capacity is the constraint. We can absorb one strategic initiative without disruption. Sequencing matters more than scope here.`,
-  CRO: ({ rev }) =>
-    `Pipeline conversion is the leverage point. A pricing experiment on the top cohort could yield ${fmtMoney(rev * 0.04)} of upside without expanding headcount.`,
-};
-
-export async function runBoardroom(params: {
-  dataset_id: string | null;
-  kpis: KpiSummary | null;
-  topic: string;
-}): Promise<Omit<BoardroomConversation, "id" | "created_at">> {
-  if (BACKEND === "fastapi") return callFastApi("/boardroom", params);
-  const rev = params.kpis?.metrics.find((x) => x.key === "revenue")?.value ?? 1_000_000;
-  const margin = params.kpis?.metrics.find((x) => x.key === "margin")?.value ?? 18;
-  const growth = params.kpis?.metrics.find((x) => x.key === "growth")?.value ?? 6;
-  const ctx = { topic: params.topic, rev, margin, growth };
-
-  const order: BoardroomAgent[] = ["CEO", "CFO", "CMO", "COO", "CRO", "CFO", "CEO"];
-  const messages: BoardroomMessage[] = order.map((agent) => ({
-    id: id(),
-    agent,
-    content: AGENT_VOICE[agent](ctx),
-  }));
-  // Final CEO synthesis
-  messages.push({
-    id: id(),
-    agent: "CEO",
-    content: `Decision: pilot a pricing change on the top cohort, hold opex flat, refresh the forecast in 30 days. CFO owns the model, CRO owns the pilot, CMO supports with positioning. We reconvene in four weeks.`,
-  });
-
-  return { dataset_id: params.dataset_id, topic: params.topic, messages };
-}
-
-// --- Action Plans ----------------------------------------------------------
-export async function generateActionPlan(params: {
-  dataset_id: string | null;
-  horizon_days: 30 | 60 | 90;
-  brief?: { priorities: { title: string; owner: string; due: string }[] } | null;
-}): Promise<Omit<ActionPlan, "id" | "created_at" | "updated_at">> {
-  if (BACKEND === "fastapi") return callFastApi("/action-plan", params);
-
-  const base: Record<30 | 60 | 90, ActionInitiative[]> = {
-    30: [
-      { id: id(), title: "Approve pricing experiment", description: "CRO to define cohort and test mechanic.", owner: "CRO", status: "in_progress", progress: 30 },
-      { id: id(), title: "Stand up rolling forecast", description: "CFO converts periodic forecast to 13-week rolling.", owner: "CFO", status: "not_started", progress: 0 },
-      { id: id(), title: "Board operating cadence", description: "Lock weekly KPI review and monthly strategy review.", owner: "CEO", status: "not_started", progress: 0 },
-    ],
-    60: [
-      { id: id(), title: "Launch tiered pricing", description: "Roll out winning variant from 30-day pilot.", owner: "CRO", status: "not_started", progress: 0 },
-      { id: id(), title: "Zero-based cost review", description: "Target bottom-quartile margin periods.", owner: "CFO", status: "not_started", progress: 0 },
-      { id: id(), title: "Customer health scoring", description: "Front-load churn signal capture.", owner: "COO", status: "not_started", progress: 0 },
-    ],
-    90: [
-      { id: id(), title: "Channel expansion pilot", description: "Pilot one new channel based on capacity analysis.", owner: "CMO", status: "not_started", progress: 0 },
-      { id: id(), title: "Quarterly strategy reset", description: "Reset OKRs based on 60-day outcomes.", owner: "CEO", status: "not_started", progress: 0 },
-      { id: id(), title: "Operating model review", description: "Capacity, headcount, and tooling alignment.", owner: "COO", status: "not_started", progress: 0 },
-    ],
-  };
-
-  return {
-    dataset_id: params.dataset_id,
-    horizon_days: params.horizon_days,
-    initiatives: base[params.horizon_days],
-    progress: 0,
+    meta: fallbackMeta(brainRes),
   };
 }

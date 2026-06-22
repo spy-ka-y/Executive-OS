@@ -2,6 +2,8 @@
 // from raw uploaded rows. Used by CEO Brief and Executive Copilot so both
 // surfaces reason over the same findings rather than generic KPI templates.
 import type { DatasetColumn, DatasetRow, KpiSummary } from "./types";
+import { analyzeCapability, type DataCapability } from "./capability";
+import { linearTrend, forecastSeries, herfindahl, type TrendFit, type ForecastResult } from "./statistics";
 
 const REGION_KEYS = ["region", "country", "state", "territory", "market", "location", "city", "zone", "area", "geo"];
 const CATEGORY_KEYS = ["category", "product", "segment", "department", "sku", "type", "industry", "brand", "line"];
@@ -43,7 +45,80 @@ export interface BusinessIntelligence {
   trendDirection: "up" | "down" | "flat";
   trendConsistency: number; // 0-100
   forecastUpsidePct: number;
+  // Data-derived achievable forward-revenue band, computed from the firm's OWN
+  // realized period-over-period growth (not a fixed coefficient). null when
+  // there is no usable revenue time series to ground it.
+  upsideBandPct: { low: number; high: number } | null;
+  // Price elasticity of demand from a log-log regression of price vs quantity
+  // across the rows. null when the dataset lacks price/quantity columns or the
+  // fit is not meaningful — callers must gate any price-impact math on this.
+  priceElasticity: number | null;
+  // OLS trend fit on the revenue series, with R², p-value and a qualitative
+  // strength used to flag weak fits in the UI instead of asserting a trend.
+  trend: TrendFit;
+  // Forecast with prediction intervals + a backtest MAPE on THIS series, so the
+  // accuracy shown is measured on the user's own data. null with no series.
+  forecast: ForecastResult | null;
+  // Herfindahl concentration of the category mix (a real concentration measure).
+  categoryHHI: { hhi: number; normalized: number; label: "low" | "moderate" | "high" } | null;
+  // Full capability map so every downstream surface gates on the same source.
+  capability: DataCapability;
   highlights: string[]; // human-ready bullet sentences
+}
+
+// Achievable forward-revenue band derived from realized period growth.
+// Returns percentages (e.g. { low: 4.2, high: 9.1 }) or null when no series.
+function deriveUpsideBand(series: Array<{ revenue: number }>): { low: number; high: number } | null {
+  const vals = series.map((s) => s.revenue).filter((v) => Number.isFinite(v) && v > 0);
+  if (vals.length < 3) return null;
+  const rates: number[] = [];
+  for (let i = 1; i < vals.length; i++) {
+    const prev = vals[i - 1];
+    if (prev > 0) rates.push(vals[i] / prev - 1);
+  }
+  if (!rates.length) return null;
+  const mean = rates.reduce((a, b) => a + b, 0) / rates.length;
+  const positives = rates.filter((r) => r > 0);
+  const posMean = positives.length ? positives.reduce((a, b) => a + b, 0) / positives.length : mean;
+  // Conservative = 40% of average realized growth; optimistic = 80% of average
+  // positive-period growth. Bounded so a single outlier period can't dominate.
+  const low = Math.max(0, Math.min(40, mean * 100 * 0.4));
+  const high = Math.max(low + 0.5, Math.min(60, posMean * 100 * 0.8));
+  return { low: Number(low.toFixed(1)), high: Number(high.toFixed(1)) };
+}
+
+// Price elasticity via ordinary least squares on log(quantity) ~ log(price).
+// The slope is the elasticity. null unless we have >= 8 valid, varying pairs.
+function derivePriceElasticity(
+  rows: DatasetRow[],
+  priceCol: string | undefined,
+  qtyCol: string | undefined,
+): number | null {
+  if (!priceCol || !qtyCol) return null;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const r of rows) {
+    const p = toNum(r[priceCol]);
+    const q = toNum(r[qtyCol]);
+    if (p > 0 && q > 0) {
+      xs.push(Math.log(p));
+      ys.push(Math.log(q));
+    }
+  }
+  if (xs.length < 8) return null;
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxx = 0;
+  let sxy = 0;
+  for (let i = 0; i < n; i++) {
+    sxx += (xs[i] - mx) ** 2;
+    sxy += (xs[i] - mx) * (ys[i] - my);
+  }
+  if (sxx <= 1e-9) return null; // no price variation -> not identifiable
+  const slope = sxy / sxx;
+  if (!Number.isFinite(slope)) return null;
+  return Number(slope.toFixed(3));
 }
 
 function pickCol(schema: DatasetColumn[], candidates: string[], type?: DatasetColumn["type"]): string | null {
@@ -102,6 +177,7 @@ export function computeBusinessIntelligence(
   schema: DatasetColumn[],
   kpis: KpiSummary | null,
 ): BusinessIntelligence {
+  const capability = analyzeCapability(schema, rows);
   const regionCol = pickCol(schema, REGION_KEYS);
   const categoryCol = pickCol(schema, CATEGORY_KEYS);
   const customerCol = pickCol(schema, CUSTOMER_KEYS);
@@ -126,15 +202,35 @@ export function computeBusinessIntelligence(
   // Trend consistency via coefficient of variation on revenue series.
   let trendConsistency = 50;
   const series = kpis?.series ?? [];
+  const revSeries = series.map((s) => s.revenue);
   if (series.length >= 3) {
-    const vals = series.map((s) => s.revenue);
+    const vals = revSeries;
     const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
     const sigma = Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length);
     const cv = mean > 0 ? sigma / mean : 1;
     trendConsistency = Math.max(0, Math.min(100, Math.round(100 - cv * 100)));
   }
-  const trendDirection: BusinessIntelligence["trendDirection"] = growthPct > 2 ? "up" : growthPct < -2 ? "down" : "flat";
+  // Real OLS trend + forecast on the revenue series (replaces the naive
+  // ">2% growth = up" rule with a statistically-credible direction).
+  const trend = linearTrend(revSeries);
+  const forecast = revSeries.length >= 3 ? forecastSeries(revSeries, 4) : null;
+  const trendDirection: BusinessIntelligence["trendDirection"] =
+    trend.strength === "insufficient"
+      ? (growthPct > 2 ? "up" : growthPct < -2 ? "down" : "flat")
+      : trend.direction;
   const forecastUpsidePct = growthPct > 0 ? Math.min(25, growthPct) : 0;
+  const upsideBandPct = deriveUpsideBand(series);
+  const priceElasticity = derivePriceElasticity(rows, capability.roles.price, capability.roles.quantity);
+  const categoryHHI = categories.length ? herfindahl(categories.map((c) => c.share)) : null;
+
+  // Downgrade the forecast capability when the trend fit on the user's OWN
+  // series is weak — so the UI flags a low-confidence forecast instead of
+  // presenting a confident line through noise.
+  const fc = capability.capabilities.forecast;
+  if (forecast && fc && fc.status === "computable" && (trend.strength === "weak" || trend.strength === "insufficient")) {
+    fc.status = "partial";
+    fc.note = `Weak statistical fit (R² ${trend.r2.toFixed(2)}, p ${trend.pValue.toFixed(2)}); treat the forecast as low-confidence.`;
+  }
 
   const bestRegion = regions[0] ?? null;
   const worstRegion = regions.length > 1 ? regions[regions.length - 1] : null;
@@ -180,6 +276,12 @@ export function computeBusinessIntelligence(
     trendDirection,
     trendConsistency,
     forecastUpsidePct,
+    upsideBandPct,
+    priceElasticity,
+    trend,
+    forecast,
+    categoryHHI,
+    capability,
     highlights,
   };
 }

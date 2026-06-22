@@ -1,0 +1,28 @@
+{
+  "features": [
+    "Revenue",
+    "Profit",
+    "Profit_Margin",
+    "Marketing_Spend",
+    "Headcount",
+    "Customers",
+    "Customer_Concentration_%",
+    "Churn_%",
+    "Forecast_Accuracy"
+  ],
+  "classes": [
+    "Critical",
+    "High",
+    "Low"
+  ],
+  "model": "RandomForestClassifier",
+  "sklearn_target": "Risk_Level",
+  "validation_accuracy": 0.9642,
+  "onnx_classes": [
+    "Critical",
+    "High",
+    "Low"
+  ],
+  "onnx_input": "input",
+  "onnx_n_features": 9
+}

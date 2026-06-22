@@ -8,6 +8,7 @@ import { PageHeader, EmptyState } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useActiveDataset } from "@/lib/dataset-context";
+import { useIndustry } from "@/lib/industry-context";
 import { getDataset, getDatasetRows } from "@/lib/api/datasets";
 import { computeKpis } from "@/lib/api/analysis";
 import { chat } from "@/lib/api/ai";
@@ -38,6 +39,7 @@ const AGENT_ID = "Se7l9eh9kb-0vhrP7QANVG9PZbo";
 
 function ChatPage() {
   const { activeDatasetId } = useActiveDataset();
+  const { industryId } = useIndustry();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -103,6 +105,7 @@ function ChatPage() {
         schema: dataset?.schema,
         history: [...messages, userMsg],
         question: text.trim(),
+        industry: industryId,
       });
       setMessages((m) => [...m, reply]);
 

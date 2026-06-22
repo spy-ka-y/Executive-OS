@@ -14,6 +14,7 @@ import { reportLovableError } from "../lib/lovable-error-reporting";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { DatasetProvider } from "@/lib/dataset-context";
+import { IndustryProvider } from "@/lib/industry-context";
 import { Toaster } from "@/components/ui/sonner";
 import { Cursor } from "@/components/cursor";
 import { RouteProgress } from "@/components/route-progress";
@@ -146,6 +147,7 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <IndustryProvider>
       <DatasetProvider>
         <RouteProgress />
         <Cursor />
@@ -173,6 +175,7 @@ function RootComponent() {
           <Toaster richColors theme="light" />
         </SidebarProvider>
       </DatasetProvider>
+      </IndustryProvider>
     </QueryClientProvider>
   );
 }

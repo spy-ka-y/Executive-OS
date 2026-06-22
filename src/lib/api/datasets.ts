@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { Dataset, DatasetColumn, DatasetRow } from "./types";
+import { fetchRowsFromUrl } from "./connectors";
 
 function inferType(value: unknown): "number" | "date" | "boolean" | "string" {
   if (typeof value === "number") return "number";
@@ -57,6 +58,7 @@ export async function createDataset(params: {
   name: string;
   source_filename: string;
   rows: DatasetRow[];
+  source_url?: string;
 }): Promise<Dataset> {
   const schema = inferSchema(params.rows);
   // Coerce numeric strings to numbers based on inferred schema.
@@ -74,19 +76,24 @@ export async function createDataset(params: {
     return out;
   });
 
-  const { data: created, error } = await supabase
+  const baseInsert = {
+    name: params.name,
+    source_filename: params.source_filename,
+    row_count: coerced.length,
+    column_count: schema.length,
+    schema: schema as unknown as never,
+  };
+  let res = await supabase
     .from("datasets")
-    .insert({
-      name: params.name,
-      source_filename: params.source_filename,
-      row_count: coerced.length,
-      column_count: schema.length,
-      schema: schema as unknown as never,
-    })
+    .insert({ ...baseInsert, source_url: (params.source_url ?? null) as unknown as never })
     .select()
     .single();
-  if (error) throw error;
-  const ds = created as unknown as Dataset;
+  // Gracefully degrade if the `source_url` column hasn't been migrated yet.
+  if (res.error && /source_url/i.test(res.error.message)) {
+    res = await supabase.from("datasets").insert(baseInsert).select().single();
+  }
+  if (res.error) throw res.error;
+  const ds = res.data as unknown as Dataset;
 
   // Cap stored rows at 5000 to keep things snappy.
   const toStore = coerced.slice(0, 5000).map((data, row_index) => ({
@@ -106,4 +113,29 @@ export async function createDataset(params: {
 export async function deleteDataset(id: string): Promise<void> {
   const { error } = await supabase.from("datasets").delete().eq("id", id);
   if (error) throw error;
+}
+
+// Import a dataset directly from a CSV / Google Sheet URL (no file upload).
+// The source URL is stored so the dataset can be refreshed later.
+export async function importDatasetFromUrl(params: { url: string; name?: string }): Promise<Dataset> {
+  const { rows, sourceName } = await fetchRowsFromUrl(params.url);
+  return createDataset({
+    name: params.name?.trim() || sourceName,
+    source_filename: params.url,
+    rows,
+    source_url: params.url,
+  });
+}
+
+// Re-pull a dataset from its stored source URL and create a fresh, refreshed
+// dataset (true scheduled refresh would call this from a cron/server job).
+export async function refreshDatasetFromSource(dataset: Dataset): Promise<Dataset> {
+  if (!dataset.source_url) throw new Error("This dataset has no source URL to refresh from.");
+  const { rows } = await fetchRowsFromUrl(dataset.source_url);
+  return createDataset({
+    name: `${dataset.name} (refreshed ${new Date().toLocaleDateString()})`,
+    source_filename: dataset.source_url,
+    rows,
+    source_url: dataset.source_url,
+  });
 }

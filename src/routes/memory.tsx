@@ -41,8 +41,10 @@ import {
   listBoardroom,
   updateDecisionStatus,
   deleteExecutiveDecision,
+  recordDecisionOutcome,
+  computeDecisionHitRate,
 } from "@/lib/api/persistence";
-import type { DecisionStatus, ExecutiveDecision } from "@/lib/api/types";
+import type { DecisionStatus, DecisionOutcome, ExecutiveDecision } from "@/lib/api/types";
 
 export const Route = createFileRoute("/memory")({
   head: () => ({ meta: [{ title: "Executive Memory, ExecutiveOS" }] }),
@@ -104,7 +106,8 @@ function ExecutiveMemoryPage() {
     const avgProgress = memory.length
       ? Math.round(memory.reduce((a, m) => a + m.progress, 0) / memory.length)
       : 0;
-    return { open, completed, blocked, overdue, avgConsensus, avgConfidence, successRate, avgProgress };
+    const hit = computeDecisionHitRate(memory);
+    return { open, completed, blocked, overdue, avgConsensus, avgConfidence, successRate, avgProgress, hit };
   }, [memory]);
 
   const consensusTrend = useMemo(
@@ -136,6 +139,15 @@ function ExecutiveMemoryPage() {
       toast.error(e instanceof Error ? e.message : "Delete failed");
     }
   }
+  async function setOutcome(id: string, outcome: DecisionOutcome) {
+    try {
+      await recordDecisionOutcome(id, { outcome });
+      await qc.invalidateQueries({ queryKey: ["executive-decisions"] });
+      toast.success(`Outcome recorded: ${outcome}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not record outcome (is the migration applied?)");
+    }
+  }
 
   return (
     <>
@@ -159,7 +171,11 @@ function ExecutiveMemoryPage() {
           {/* Stats */}
           <section className="grid md:grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
             <StatCard label="Decisions captured" value={String(memory.length)} sub={`${stats.completed.length} completed · ${stats.open.length} open`} />
-            <StatCard label="Execution success rate" value={`${stats.successRate}%`} sub={`Avg progress ${stats.avgProgress}%`} />
+            <StatCard
+              label="Decision hit-rate"
+              value={stats.hit ? `${stats.hit.hitRate}%` : "—"}
+              sub={stats.hit ? `${stats.hit.wins}/${stats.hit.graded} wins, graded by real outcomes` : "Record outcomes below to measure"}
+            />
             <StatCard label="Avg consensus" value={`${stats.avgConsensus}/100`} sub={`Avg confidence ${stats.avgConfidence}%`} />
             <StatCard label="Overdue decisions" value={String(stats.overdue.length)} sub={`${stats.blocked.length} blocked`} tone={stats.overdue.length > 0 ? "warn" : "ok"} />
           </section>
@@ -168,7 +184,7 @@ function ExecutiveMemoryPage() {
           <Section icon={<History className="h-4 w-4" />} label="01" title="Decision Timeline" subtitle="Chronological log of every executive decision in this dataset.">
             <div className="space-y-2">
               {sorted.slice().reverse().map((m) => (
-                <DecisionRow key={m.id} m={m} onStatus={setStatus} onRemove={remove} />
+                <DecisionRow key={m.id} m={m} onStatus={setStatus} onRemove={remove} onOutcome={setOutcome} />
               ))}
             </div>
           </Section>
@@ -272,14 +288,22 @@ function ExecutiveMemoryPage() {
   );
 }
 
+const OUTCOME_BADGE: Record<DecisionOutcome, string> = {
+  win: "bg-success/15 text-success border-success/30",
+  mixed: "bg-warning/15 text-warning border-warning/30",
+  loss: "bg-destructive/15 text-destructive border-destructive/30",
+};
+
 function DecisionRow({
   m,
   onStatus,
   onRemove,
+  onOutcome,
 }: {
   m: ExecutiveDecision;
   onStatus: (id: string, s: DecisionStatus) => void;
   onRemove: (id: string) => void;
+  onOutcome: (id: string, o: DecisionOutcome) => void;
 }) {
   const days = Math.round((Date.now() - new Date(m.created_at).getTime()) / 86400000);
   const target = parseTimelineDays(m.timeline) ?? 30;
@@ -326,6 +350,31 @@ function DecisionRow({
       <p className="text-[10px] text-muted-foreground mt-2">
         Consensus {m.consensus_score}/100 · Confidence {m.confidence_score}% · {days}d ago
       </p>
+
+      {/* Outcome loop: grade the decision by what actually happened */}
+      <div className="flex items-center justify-between gap-3 mt-3 pt-3 border-t border-border/50">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Actual outcome</span>
+          {m.outcome ? (
+            <Badge variant="outline" className={OUTCOME_BADGE[m.outcome]}>{m.outcome}</Badge>
+          ) : (
+            <span className="text-[11px] text-muted-foreground/70">not recorded</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          {(["win", "mixed", "loss"] as DecisionOutcome[]).map((o) => (
+            <button
+              key={o}
+              onClick={() => onOutcome(m.id, o)}
+              className={`text-[11px] capitalize px-2 py-1 rounded-md border transition-colors ${
+                m.outcome === o ? OUTCOME_BADGE[o] : "border-border/60 text-muted-foreground hover:text-foreground hover:border-border"
+              }`}
+            >
+              {o}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
