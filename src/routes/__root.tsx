@@ -16,6 +16,9 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { DatasetProvider } from "@/lib/dataset-context";
 import { IndustryProvider } from "@/lib/industry-context";
 import { DbStatus } from "@/components/db-status";
+import { AuthProvider, useAuth } from "@/lib/auth-context";
+import { AuthScreen } from "@/components/auth-screen";
+import { Loader2, LogOut } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { Cursor } from "@/components/cursor";
 import { RouteProgress } from "@/components/route-progress";
@@ -148,30 +151,69 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <IndustryProvider>
-      <DatasetProvider>
-        <RouteProgress />
-        <Cursor />
-        <SidebarProvider>
-          <div className="min-h-screen flex w-full">
-            <AppSidebar />
-            <SidebarInset className="bg-transparent">
-              <header className="h-16 flex items-center gap-3 border-b border-border bg-background/70 backdrop-blur-xl px-6 lg:px-12 sticky top-0 z-30">
-                <SidebarTrigger className="text-foreground/70 hover:text-foreground" />
-                <div className="flex-1" />
-                <DbStatus />
-              </header>
-              <main className="flex-1 px-6 lg:px-12 xl:px-16 pt-6 pb-10 lg:pt-8 lg:pb-16 max-w-[1500px] w-full mx-auto">
-                <div key={pathname} className="route-enter">
-                  <Outlet />
+      <AuthProvider>
+        <IndustryProvider>
+          <DatasetProvider>
+            <AuthGate>
+              <RouteProgress />
+              <Cursor />
+              <SidebarProvider>
+                <div className="min-h-screen flex w-full">
+                  <AppSidebar />
+                  <SidebarInset className="bg-transparent">
+                    <header className="h-16 flex items-center gap-3 border-b border-border bg-background/70 backdrop-blur-xl px-6 lg:px-12 sticky top-0 z-30">
+                      <SidebarTrigger className="text-foreground/70 hover:text-foreground" />
+                      <div className="flex-1" />
+                      <DbStatus />
+                      <UserMenu />
+                    </header>
+                    <main className="flex-1 px-6 lg:px-12 xl:px-16 pt-6 pb-10 lg:pt-8 lg:pb-16 max-w-[1500px] w-full mx-auto">
+                      <div key={pathname} className="route-enter">
+                        <Outlet />
+                      </div>
+                    </main>
+                  </SidebarInset>
                 </div>
-              </main>
-            </SidebarInset>
-          </div>
-          <Toaster richColors theme="light" />
-        </SidebarProvider>
-      </DatasetProvider>
-      </IndustryProvider>
+              </SidebarProvider>
+            </AuthGate>
+          </DatasetProvider>
+        </IndustryProvider>
+        <Toaster richColors theme="light" />
+      </AuthProvider>
     </QueryClientProvider>
+  );
+}
+
+// Renders a loading state, the login screen, or the app depending on auth.
+function AuthGate({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen grid place-items-center bg-background">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+  if (!user) return <AuthScreen />;
+  return <>{children}</>;
+}
+
+// Signed-in user's email + sign-out, in the header.
+function UserMenu() {
+  const { user, signOut } = useAuth();
+  if (!user) return null;
+  return (
+    <div className="flex items-center gap-2.5 pl-1">
+      <span className="hidden md:inline text-xs text-muted-foreground max-w-[16ch] truncate" title={user.email}>
+        {user.email}
+      </span>
+      <button
+        onClick={() => signOut()}
+        title="Sign out"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+      >
+        <LogOut className="h-3 w-3" /> Sign out
+      </button>
+    </div>
   );
 }

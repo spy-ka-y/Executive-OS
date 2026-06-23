@@ -6,6 +6,25 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;  -- gen_random_uuid()
 
+-- ── Authentication (users + sessions) ───────────────────────────────────────
+-- Self-hosted auth on Aurora: scrypt-hashed passwords, DB-backed session tokens
+-- carried in an httpOnly cookie. No third-party auth provider.
+CREATE TABLE IF NOT EXISTS users (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email         TEXT NOT NULL UNIQUE,
+  name          TEXT,
+  password_hash TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token      TEXT PRIMARY KEY,
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
 -- ── Datasets + rows ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS datasets (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -165,8 +184,19 @@ CREATE TABLE IF NOT EXISTS executive_metrics_real (
   PRIMARY KEY (ticker, fiscal_year)
 );
 
+-- ── Multi-tenant ownership: user_id on every directly-listable table ─────────
+-- Dataset-derived tables (kpi/forecast/brief/consultant/sim) inherit isolation
+-- through their owning dataset (UUID-keyed); the tables below can be listed
+-- without a dataset filter, so they are scoped by user_id directly.
+ALTER TABLE datasets                ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE boardroom_conversations ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE action_plans            ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE generated_reports       ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE executive_decisions     ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+
 -- ── Indexes ──────────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_dataset_rows_dataset ON dataset_rows(dataset_id, row_index);
+CREATE INDEX IF NOT EXISTS idx_datasets_user        ON datasets(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_kpi_dataset            ON kpi_summaries(dataset_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_forecast_dataset       ON forecast_results(dataset_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ceo_dataset            ON ceo_briefs(dataset_id, created_at DESC);

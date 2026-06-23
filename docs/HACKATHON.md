@@ -75,7 +75,10 @@ Key properties judges look for:
   badges, a data-quality score before analysis is trusted.
 - **Impact & real-world applicability** — a genuine B2B need (fast, trustworthy
   executive analysis) on production-grade infra (Aurora + Vercel); ships with
-  industry calibration and an outcome feedback loop.
+  **email/password authentication + per-account data isolation** (sessions in
+  Aurora, scrypt-hashed passwords — `docs/SECURITY.md`), industry calibration,
+  and an outcome feedback loop. This is account-isolated multi-tenant software,
+  not an open demo.
 - **Originality** — an "honesty-first" BI copilot: it quantifies only what the
   data supports, grades its own past decisions by real outcomes, and discloses
   every assumption.
@@ -92,8 +95,10 @@ Key properties judges look for:
 ## 3-minute demo script
 1. **Problem (20s):** "Teams either pay analysts or trust hallucinated AI BI.
    ExecutiveOS gives honest, data-grounded executive analysis on production infra."
-2. **Ingest (25s):** upload a CSV or **Import from URL / Google Sheet**; show the
-   Data Quality score. (This writes rows to **Aurora**.)
+2. **Sign up (10s):** create an account — show the login screen ("Secured on
+   Amazon Aurora PostgreSQL"); the user + session are written to **Aurora**.
+3. **Ingest (25s):** upload a CSV or **Import from URL / Google Sheet**; show the
+   Data Quality score. (This writes owner-scoped rows to **Aurora**.)
 3. **Decide (60s):** CEO Brief (health score + forecast with backtest error),
    Consultant report, then the **AI Boardroom** live debate; show the live-AI badge.
 4. **Memory + outcomes (25s):** Executive Memory — log a decision, record its real

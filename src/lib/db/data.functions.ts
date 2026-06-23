@@ -16,23 +16,35 @@ const dsNullableIn = z.object({ dataset_id: z.string().nullable() });
 // ── Datasets ─────────────────────────────────────────────────────────────────
 export const dbListDatasets = createServerFn({ method: "GET" }).handler(async () => {
   const { queryRows } = await import("./aurora.server");
-  return queryRows("select * from datasets order by created_at desc");
+  const { currentUserId } = await import("./auth.server");
+  const uid = await currentUserId();
+  if (!uid) return [];
+  return queryRows("select * from datasets where user_id = $1 order by created_at desc", [uid]);
 });
 
 export const dbGetDataset = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => idIn.parse(d))
   .handler(async ({ data }) => {
     const { queryOne } = await import("./aurora.server");
-    return queryOne("select * from datasets where id = $1", [data.id]);
+    const { currentUserId } = await import("./auth.server");
+    const uid = await currentUserId();
+    if (!uid) return null;
+    return queryOne("select * from datasets where id = $1 and user_id = $2", [data.id, uid]);
   });
 
 export const dbGetDatasetRows = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => z.object({ id: z.string().min(1), limit: z.number().optional() }).parse(d))
   .handler(async ({ data }) => {
     const { queryRows } = await import("./aurora.server");
+    const { currentUserId } = await import("./auth.server");
+    const uid = await currentUserId();
+    if (!uid) return [];
     const rows = await queryRows<{ data: DbValue }>(
-      "select data from dataset_rows where dataset_id = $1 order by row_index asc limit $2",
-      [data.id, data.limit ?? 5000],
+      `select r.data from dataset_rows r
+        where r.dataset_id = $1
+          and exists (select 1 from datasets d where d.id = r.dataset_id and d.user_id = $2)
+        order by r.row_index asc limit $3`,
+      [data.id, uid, data.limit ?? 5000],
     );
     return rows.map((r) => r.data);
   });
@@ -49,11 +61,13 @@ export const dbCreateDataset = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const { withTransaction } = await import("./aurora.server");
+    const { requireUserId } = await import("./auth.server");
+    const uid = await requireUserId();
     return withTransaction(async (client) => {
       const ins = await client.query(
-        `insert into datasets (name, source_filename, source_url, row_count, column_count, schema)
-         values ($1,$2,$3,$4,$5,$6) returning *`,
-        [data.name, data.source_filename ?? null, data.source_url ?? null, data.rows.length, data.schema.length, JSON.stringify(data.schema)],
+        `insert into datasets (name, source_filename, source_url, row_count, column_count, schema, user_id)
+         values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+        [data.name, data.source_filename ?? null, data.source_url ?? null, data.rows.length, data.schema.length, JSON.stringify(data.schema), uid],
       );
       const ds = ins.rows[0] as DbRow & { id: string };
       const capped = data.rows.slice(0, 5000);
@@ -80,7 +94,9 @@ export const dbDeleteDataset = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => idIn.parse(d))
   .handler(async ({ data }) => {
     const { query } = await import("./aurora.server");
-    await query("delete from datasets where id = $1", [data.id]);
+    const { requireUserId } = await import("./auth.server");
+    const uid = await requireUserId();
+    await query("delete from datasets where id = $1 and user_id = $2", [data.id, uid]);
     return { ok: true };
   });
 
@@ -186,16 +202,21 @@ export const dbSaveBoardroom = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ dataset_id: z.string().nullable(), topic: z.string(), messages: j }).parse(d))
   .handler(async ({ data }) => {
     const { queryOne } = await import("./aurora.server");
-    return queryOne("insert into boardroom_conversations (dataset_id, topic, messages) values ($1,$2,$3) returning *",
-      [data.dataset_id, data.topic, JSON.stringify(data.messages)]);
+    const { requireUserId } = await import("./auth.server");
+    const uid = await requireUserId();
+    return queryOne("insert into boardroom_conversations (dataset_id, topic, messages, user_id) values ($1,$2,$3,$4) returning *",
+      [data.dataset_id, data.topic, JSON.stringify(data.messages), uid]);
   });
 
 export const dbListBoardroom = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => dsNullableIn.parse(d))
   .handler(async ({ data }) => {
     const { queryRows } = await import("./aurora.server");
-    if (data.dataset_id) return queryRows("select * from boardroom_conversations where dataset_id = $1 order by created_at desc", [data.dataset_id]);
-    return queryRows("select * from boardroom_conversations order by created_at desc");
+    const { currentUserId } = await import("./auth.server");
+    const uid = await currentUserId();
+    if (!uid) return [];
+    if (data.dataset_id) return queryRows("select * from boardroom_conversations where dataset_id = $1 and user_id = $2 order by created_at desc", [data.dataset_id, uid]);
+    return queryRows("select * from boardroom_conversations where user_id = $1 order by created_at desc", [uid]);
   });
 
 // ── Action plans ─────────────────────────────────────────────────────────────
@@ -205,15 +226,17 @@ export const dbUpsertActionPlan = createServerFn({ method: "POST" })
   }).parse(d))
   .handler(async ({ data }) => {
     const { queryOne } = await import("./aurora.server");
+    const { requireUserId } = await import("./auth.server");
+    const uid = await requireUserId();
     if (data.id) {
       return queryOne(
-        "update action_plans set initiatives=$1, progress=$2, updated_at=now() where id=$3 returning *",
-        [JSON.stringify(data.initiatives), data.progress, data.id],
+        "update action_plans set initiatives=$1, progress=$2, updated_at=now() where id=$3 and user_id=$4 returning *",
+        [JSON.stringify(data.initiatives), data.progress, data.id, uid],
       );
     }
     return queryOne(
-      "insert into action_plans (dataset_id, horizon_days, initiatives, progress) values ($1,$2,$3,$4) returning *",
-      [data.dataset_id, data.horizon_days, JSON.stringify(data.initiatives), data.progress],
+      "insert into action_plans (dataset_id, horizon_days, initiatives, progress, user_id) values ($1,$2,$3,$4,$5) returning *",
+      [data.dataset_id, data.horizon_days, JSON.stringify(data.initiatives), data.progress, uid],
     );
   });
 
@@ -221,22 +244,30 @@ export const dbListActionPlans = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => dsNullableIn.parse(d))
   .handler(async ({ data }) => {
     const { queryRows } = await import("./aurora.server");
-    if (data.dataset_id) return queryRows("select * from action_plans where dataset_id = $1 order by horizon_days asc", [data.dataset_id]);
-    return queryRows("select * from action_plans order by horizon_days asc");
+    const { currentUserId } = await import("./auth.server");
+    const uid = await currentUserId();
+    if (!uid) return [];
+    if (data.dataset_id) return queryRows("select * from action_plans where dataset_id = $1 and user_id = $2 order by horizon_days asc", [data.dataset_id, uid]);
+    return queryRows("select * from action_plans where user_id = $1 order by horizon_days asc", [uid]);
   });
 
 // ── Generated reports ────────────────────────────────────────────────────────
 export const dbListReports = createServerFn({ method: "GET" }).handler(async () => {
   const { queryRows } = await import("./aurora.server");
-  return queryRows("select * from generated_reports order by created_at desc");
+  const { currentUserId } = await import("./auth.server");
+  const uid = await currentUserId();
+  if (!uid) return [];
+  return queryRows("select * from generated_reports where user_id = $1 order by created_at desc", [uid]);
 });
 
 export const dbSaveReport = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ dataset_id: z.string().nullable(), kind: z.string(), title: z.string(), storage_path: z.string().nullable() }).parse(d))
   .handler(async ({ data }) => {
     const { queryOne } = await import("./aurora.server");
-    return queryOne("insert into generated_reports (dataset_id, kind, title, storage_path) values ($1,$2,$3,$4) returning *",
-      [data.dataset_id, data.kind, data.title, data.storage_path]);
+    const { requireUserId } = await import("./auth.server");
+    const uid = await requireUserId();
+    return queryOne("insert into generated_reports (dataset_id, kind, title, storage_path, user_id) values ($1,$2,$3,$4,$5) returning *",
+      [data.dataset_id, data.kind, data.title, data.storage_path, uid]);
   });
 
 // ── Executive decisions (memory + outcome loop) ──────────────────────────────
@@ -250,12 +281,14 @@ export const dbSaveExecutiveDecision = createServerFn({ method: "POST" })
   }).parse(d))
   .handler(async ({ data }) => {
     const { queryOne } = await import("./aurora.server");
+    const { requireUserId } = await import("./auth.server");
+    const uid = await requireUserId();
     return queryOne(
       `insert into executive_decisions
-        (dataset_id, conversation_id, question, decision, consensus_score, confidence_score, revenue_impact, profit_impact, risk_level, owner, timeline, next_actions)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
+        (dataset_id, conversation_id, question, decision, consensus_score, confidence_score, revenue_impact, profit_impact, risk_level, owner, timeline, next_actions, user_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
       [data.dataset_id, data.conversation_id ?? null, data.question, data.decision, data.consensus_score, data.confidence_score,
-       data.revenue_impact ?? null, data.profit_impact ?? null, data.risk_level, data.owner ?? null, data.timeline ?? null, JSON.stringify(data.next_actions)],
+       data.revenue_impact ?? null, data.profit_impact ?? null, data.risk_level, data.owner ?? null, data.timeline ?? null, JSON.stringify(data.next_actions), uid],
     );
   });
 
@@ -263,9 +296,12 @@ export const dbListExecutiveDecisions = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => dsNullableIn.parse(d))
   .handler(async ({ data }) => {
     const { queryRows } = await import("./aurora.server");
+    const { currentUserId } = await import("./auth.server");
+    const uid = await currentUserId();
+    if (!uid) return [];
     const rows = data.dataset_id
-      ? await queryRows<DbRow>("select * from executive_decisions where dataset_id = $1 order by created_at desc", [data.dataset_id])
-      : await queryRows<DbRow>("select * from executive_decisions order by created_at desc");
+      ? await queryRows<DbRow>("select * from executive_decisions where dataset_id = $1 and user_id = $2 order by created_at desc", [data.dataset_id, uid])
+      : await queryRows<DbRow>("select * from executive_decisions where user_id = $1 order by created_at desc", [uid]);
     return rows.map((r) => ({ ...r, next_actions: Array.isArray(r.next_actions) ? r.next_actions : [] }));
   });
 
@@ -279,6 +315,8 @@ export const dbUpdateExecutiveDecision = createServerFn({ method: "POST" })
   }).parse(d))
   .handler(async ({ data }) => {
     const { query } = await import("./aurora.server");
+    const { requireUserId } = await import("./auth.server");
+    const uid = await requireUserId();
     const sets: string[] = [];
     const params: unknown[] = [];
     let i = 1;
@@ -289,8 +327,8 @@ export const dbUpdateExecutiveDecision = createServerFn({ method: "POST" })
     }
     if (sets.length) {
       sets.push("updated_at = now()");
-      params.push(data.id);
-      await query(`update executive_decisions set ${sets.join(", ")} where id = $${i}`, params);
+      params.push(data.id, uid);
+      await query(`update executive_decisions set ${sets.join(", ")} where id = $${i} and user_id = $${i + 1}`, params);
     }
     return { ok: true };
   });
@@ -299,7 +337,9 @@ export const dbDeleteExecutiveDecision = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => idIn.parse(d))
   .handler(async ({ data }) => {
     const { query } = await import("./aurora.server");
-    await query("delete from executive_decisions where id = $1", [data.id]);
+    const { requireUserId } = await import("./auth.server");
+    const uid = await requireUserId();
+    await query("delete from executive_decisions where id = $1 and user_id = $2", [data.id, uid]);
     return { ok: true };
   });
 
@@ -309,9 +349,11 @@ export const dbRecordDecisionOutcome = createServerFn({ method: "POST" })
   }).parse(d))
   .handler(async ({ data }) => {
     const { query } = await import("./aurora.server");
+    const { requireUserId } = await import("./auth.server");
+    const uid = await requireUserId();
     await query(
-      "update executive_decisions set outcome=$1, actual_value=$2, outcome_notes=$3, outcome_at=now() where id=$4",
-      [data.outcome, data.actual_value ?? null, data.outcome_notes ?? null, data.id],
+      "update executive_decisions set outcome=$1, actual_value=$2, outcome_notes=$3, outcome_at=now() where id=$4 and user_id=$5",
+      [data.outcome, data.actual_value ?? null, data.outcome_notes ?? null, data.id, uid],
     );
     return { ok: true };
   });
