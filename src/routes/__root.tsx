@@ -15,6 +15,7 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/s
 import { AppSidebar } from "@/components/app-sidebar";
 import { DatasetProvider } from "@/lib/dataset-context";
 import { IndustryProvider } from "@/lib/industry-context";
+import { DbStatus } from "@/components/db-status";
 import { Toaster } from "@/components/ui/sonner";
 import { Cursor } from "@/components/cursor";
 import { RouteProgress } from "@/components/route-progress";
@@ -158,12 +159,7 @@ function RootComponent() {
               <header className="h-16 flex items-center gap-3 border-b border-border bg-background/70 backdrop-blur-xl px-6 lg:px-12 sticky top-0 z-30">
                 <SidebarTrigger className="text-foreground/70 hover:text-foreground" />
                 <div className="flex-1" />
-                <div className="flex items-center gap-2.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-success shadow-[0_0_8px_var(--color-success)]" />
-                  <span className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
-                    Private Workspace
-                  </span>
-                </div>
+                <DbStatus />
               </header>
               <main className="flex-1 px-6 lg:px-12 xl:px-16 pt-6 pb-10 lg:pt-8 lg:pb-16 max-w-[1500px] w-full mx-auto">
                 <div key={pathname} className="route-enter">

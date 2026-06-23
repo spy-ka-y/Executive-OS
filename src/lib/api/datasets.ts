@@ -1,6 +1,15 @@
-import { supabase } from "@/integrations/supabase/client";
+// Dataset API. Schema inference + numeric coercion happen here (pure, runs
+// anywhere); all persistence goes through the Aurora-backed server functions in
+// src/lib/db/data.functions.ts (Vercel serverless → Amazon Aurora PostgreSQL).
 import type { Dataset, DatasetColumn, DatasetRow } from "./types";
 import { fetchRowsFromUrl } from "./connectors";
+import {
+  dbListDatasets,
+  dbGetDataset,
+  dbGetDatasetRows,
+  dbCreateDataset,
+  dbDeleteDataset,
+} from "@/lib/db/data.functions";
 
 function inferType(value: unknown): "number" | "date" | "boolean" | "string" {
   if (typeof value === "number") return "number";
@@ -21,37 +30,22 @@ export function inferSchema(rows: DatasetRow[]): DatasetColumn[] {
   return keys.map((name) => {
     const types = sample.map((r) => inferType(r[name])).filter((t) => t !== "string");
     const dominant = types.sort(
-      (a, b) =>
-        types.filter((t) => t === b).length - types.filter((t) => t === a).length,
+      (a, b) => types.filter((t) => t === b).length - types.filter((t) => t === a).length,
     )[0];
     return { name, type: (dominant ?? "string") as DatasetColumn["type"] };
   });
 }
 
 export async function listDatasets(): Promise<Dataset[]> {
-  const { data, error } = await supabase
-    .from("datasets")
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return (data ?? []) as unknown as Dataset[];
+  return (await dbListDatasets()) as unknown as Dataset[];
 }
 
 export async function getDataset(id: string): Promise<Dataset | null> {
-  const { data, error } = await supabase.from("datasets").select("*").eq("id", id).maybeSingle();
-  if (error) throw error;
-  return (data as unknown as Dataset) ?? null;
+  return (await dbGetDataset({ data: { id } })) as unknown as Dataset | null;
 }
 
 export async function getDatasetRows(id: string, limit = 5000): Promise<DatasetRow[]> {
-  const { data, error } = await supabase
-    .from("dataset_rows")
-    .select("data, row_index")
-    .eq("dataset_id", id)
-    .order("row_index", { ascending: true })
-    .limit(limit);
-  if (error) throw error;
-  return (data ?? []).map((r) => r.data as DatasetRow);
+  return (await dbGetDatasetRows({ data: { id, limit } })) as unknown as DatasetRow[];
 }
 
 export async function createDataset(params: {
@@ -61,7 +55,7 @@ export async function createDataset(params: {
   source_url?: string;
 }): Promise<Dataset> {
   const schema = inferSchema(params.rows);
-  // Coerce numeric strings to numbers based on inferred schema.
+  // Coerce numeric strings to numbers based on the inferred schema.
   const coerced = params.rows.map((row) => {
     const out: DatasetRow = {};
     for (const col of schema) {
@@ -76,47 +70,23 @@ export async function createDataset(params: {
     return out;
   });
 
-  const baseInsert = {
-    name: params.name,
-    source_filename: params.source_filename,
-    row_count: coerced.length,
-    column_count: schema.length,
-    schema: schema as unknown as never,
-  };
-  let res = await supabase
-    .from("datasets")
-    .insert({ ...baseInsert, source_url: (params.source_url ?? null) as unknown as never })
-    .select()
-    .single();
-  // Gracefully degrade if the `source_url` column hasn't been migrated yet.
-  if (res.error && /source_url/i.test(res.error.message)) {
-    res = await supabase.from("datasets").insert(baseInsert).select().single();
-  }
-  if (res.error) throw res.error;
-  const ds = res.data as unknown as Dataset;
-
-  // Cap stored rows at 5000 to keep things snappy.
-  const toStore = coerced.slice(0, 5000).map((data, row_index) => ({
-    dataset_id: ds.id,
-    row_index,
-    data: data as unknown as never,
-  }));
-  // Insert in chunks of 500.
-  for (let i = 0; i < toStore.length; i += 500) {
-    const chunk = toStore.slice(i, i + 500);
-    const { error: insErr } = await supabase.from("dataset_rows").insert(chunk);
-    if (insErr) throw insErr;
-  }
-  return ds;
+  return (await dbCreateDataset({
+    data: {
+      name: params.name,
+      source_filename: params.source_filename,
+      source_url: params.source_url ?? null,
+      schema,
+      rows: coerced,
+    },
+  })) as unknown as Dataset;
 }
 
 export async function deleteDataset(id: string): Promise<void> {
-  const { error } = await supabase.from("datasets").delete().eq("id", id);
-  if (error) throw error;
+  await dbDeleteDataset({ data: { id } });
 }
 
-// Import a dataset directly from a CSV / Google Sheet URL (no file upload).
-// The source URL is stored so the dataset can be refreshed later.
+// Import a dataset directly from a CSV / Google Sheet URL (no file upload). The
+// fetch/parse happens client-side; the resulting rows are persisted to Aurora.
 export async function importDatasetFromUrl(params: { url: string; name?: string }): Promise<Dataset> {
   const { rows, sourceName } = await fetchRowsFromUrl(params.url);
   return createDataset({
@@ -127,8 +97,7 @@ export async function importDatasetFromUrl(params: { url: string; name?: string 
   });
 }
 
-// Re-pull a dataset from its stored source URL and create a fresh, refreshed
-// dataset (true scheduled refresh would call this from a cron/server job).
+// Re-pull a dataset from its stored source URL into a fresh, refreshed dataset.
 export async function refreshDatasetFromSource(dataset: Dataset): Promise<Dataset> {
   if (!dataset.source_url) throw new Error("This dataset has no source URL to refresh from.");
   const { rows } = await fetchRowsFromUrl(dataset.source_url);

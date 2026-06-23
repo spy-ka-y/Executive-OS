@@ -5,6 +5,18 @@
 //     error logger plugins, and sandbox detection (port/host/strictPort).
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import { loadEnv } from "vite";
+
+// Make non-VITE_ env vars (e.g. GEMINI_API_KEY) available to SERVER code in
+// `vite dev`. Vite only injects VITE_-prefixed vars into the bundle; our server
+// functions read process.env, which Vite does NOT populate from .env on its own.
+// Without this, a key present in .env still reads as "missing" at runtime and
+// every agent / the chat falls back to the built-in engine. In production the
+// host (Vercel) provides these vars directly, so this is a dev-time bridge.
+const _env = loadEnv(process.env.NODE_ENV || "development", process.cwd(), "");
+for (const _k in _env) {
+  if (process.env[_k] === undefined) process.env[_k] = _env[_k];
+}
 
 export default defineConfig({
   tanstackStart: {

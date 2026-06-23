@@ -69,7 +69,7 @@ import { computeAgentInfluence, type AgentInfluence } from "@/lib/executive-inte
 import { executeCEO, getGeminiStatus, type ExecuteCEOResult } from "@/lib/agents/executeCEO.functions";
 import { pingBrain } from "@/lib/agents/executeBrain.functions";
 import { useServerFn } from "@tanstack/react-start";
-import { callBrain, buildBoardroomAgentPrompt } from "@/lib/ai/brain";
+import { callBrain, buildBoardroomAgentPrompt, brainErrorMessage, type BrainError } from "@/lib/ai/brain";
 import { AgentResponseSchema } from "@/lib/schemas/agentResponse";
 
 export const Route = createFileRoute("/boardroom")({
@@ -412,26 +412,43 @@ function BoardroomPage() {
         debate.responses.map(async (r) => {
           const { system, user } = buildBoardroomAgentPrompt({ agent: r.agent, role: r.role, topic, intel, kpis, priorDecisions });
           const res = await callBrain({ section: `boardroom-${r.agent}`, system, user, json: true });
-          if (!res.ok || !res.parsed) return null;
+          if (!res.ok) return { ok: false as const, error: res.error };
+          if (!res.parsed) return { ok: false as const, error: { code: "empty_response", message: "Empty response" } as BrainError };
           const parsed = AgentResponseSchema.safeParse(res.parsed);
-          if (!parsed.success) return null;
+          if (!parsed.success) return { ok: false as const, error: { code: "schema_invalid", message: "Schema validation failed" } as BrainError };
           const d = parsed.data;
-          return [r.agent, {
-            observation: d.observation,
-            insight: d.insight,
-            recommendation: d.recommendation,
-            rationale: d.rationale,
-            confidence: Math.round(d.confidence),
-            support: stanceToSupport(d.stance),
-          }] as const;
+          return {
+            ok: true as const,
+            agent: r.agent,
+            reply: {
+              observation: d.observation,
+              insight: d.insight,
+              recommendation: d.recommendation,
+              rationale: d.rationale,
+              confidence: Math.round(d.confidence),
+              support: stanceToSupport(d.stance),
+            } as AiAgentReply,
+          };
         }),
       );
       if (runId !== debateRunId.current) return;
       const next: Record<string, AiAgentReply> = {};
       let okCount = 0;
-      for (const entry of results) { if (entry) { next[entry[0]] = entry[1]; okCount++; } }
+      let firstError: BrainError | null = null;
+      for (const entry of results) {
+        if (entry.ok) { next[entry.agent] = entry.reply; okCount++; }
+        else if (!firstError) firstError = entry.error;
+      }
       setAiAgents(next);
-      if (okCount === 0) setDebateError("The AI brain is unavailable, showing the built-in debate. Check the server's GEMINI_API_KEY.");
+      // Report the ACTUAL reason (missing key vs rate-limit vs budget vs schema),
+      // not a hardcoded "check your key".
+      if (okCount === 0) {
+        setDebateError(
+          firstError
+            ? `Showing the built-in debate. ${brainErrorMessage(firstError)}`
+            : "Showing the built-in debate. The live AI was unavailable.",
+        );
+      }
     } catch (e) {
       if (runId === debateRunId.current) setDebateError(e instanceof Error ? e.message : "Live debate failed.");
     } finally {

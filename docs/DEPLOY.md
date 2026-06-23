@@ -23,32 +23,27 @@ Server-only (never exposed to the browser):
 
 | Var | Required | Purpose |
 | --- | --- | --- |
+| `DATABASE_URL` | **yes** | Amazon Aurora PostgreSQL connection string (cluster endpoint or RDS Proxy). The app's entire data layer. Server-only. |
 | `GEMINI_API_KEY` | yes (for live AI) | Google Gemini key. Aliases `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` also accepted. Without it the app runs on the built-in deterministic engine and says so. |
 | `GEMINI_MODEL` | no | Override the default model (`gemini-2.5-flash`). |
 | `LLM_DAILY_CALL_BUDGET` | no | Max live calls/day/instance before falling back to built-in (default 250). |
 | `LLM_CACHE_TTL_MS` | no | Cache TTL for identical prompts (default 1h). |
-| `SUPABASE_URL` | yes | Supabase project URL (SSR). |
-| `SUPABASE_PUBLISHABLE_KEY` | yes | Supabase anon/publishable key (SSR). |
+| `PGSSL` | no | Set to `disable` only for a local non-TLS Postgres. Aurora uses TLS (default). |
+| `SUPABASE_*` / `VITE_SUPABASE_*` | no | Optional auth shim only. The app runs fully on Aurora without them. |
 
-Client (build-time, injected into the bundle — must be set at build):
+## 3. Database setup (Amazon Aurora PostgreSQL)
 
-| Var | Required |
-| --- | --- |
-| `VITE_SUPABASE_URL` | yes |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | yes |
+1. Provision an Aurora PostgreSQL cluster (Serverless v2 is fine) and get its
+   connection string.
+2. Apply the schema (idempotent):
+   ```bash
+   psql "$DATABASE_URL" -f db/schema.sql
+   ```
+3. Set `DATABASE_URL` in Vercel and in local `.env`.
 
-## 3. Database migrations
-
-Apply everything in `supabase/migrations/` to your Supabase project (Supabase CLI
-`supabase db push`, or paste in the SQL editor in timestamp order). The newest,
-required for full functionality:
-
-- `20260620230000_report_generation_meta.sql` — AI-vs-built-in provenance
-- `20260620240000_decision_outcomes.sql` — decision outcome loop / hit-rate
-- `20260620250000_dataset_source_url.sql` — connector refresh source
-
-All are idempotent (`IF NOT EXISTS`) and the app degrades gracefully if a column
-is missing, so an un-migrated deploy still runs.
+For high concurrency, put **Amazon RDS Proxy** in front and point `DATABASE_URL`
+at the proxy endpoint — no code change. (`supabase/migrations/` is legacy from the
+previous Supabase backend and is no longer used by the app.)
 
 ## 4. After deploy — verify live AI
 

@@ -1,13 +1,10 @@
 // Reads model-quality metrics for the in-app Accuracy dashboard
-// (src/routes/accuracy.tsx). Two sources, both read with the anon key:
+// (src/routes/accuracy.tsx) from Amazon Aurora PostgreSQL via server functions:
 //   - model_eval_runs : risk classifier accuracy + forecast accuracy (1 - MAPE)
 //   - eval_runs       : LLM-as-judge pass rate + failing golden scenarios
-//
-// Neither table is in the generated Supabase `Database` type yet, so the
-// `.from()` calls are cast. Both expose metrics only — no held-out test rows or
-// golden answers (those stay service-role only).
-import { supabase } from "@/integrations/supabase/client";
+//   - executive_metrics_real : real public-company data for the backtest
 import type { JudgeVerdict } from "@/lib/ai/judge.server";
+import { dbGetModelEvalRuns, dbGetLlmEvalRuns, dbGetRealMetrics } from "@/lib/db/data.functions";
 
 export const RISK_MODEL = "risk_level_rf";
 export const FORECAST_MODEL = "forecast_revenue_gbr";
@@ -50,23 +47,14 @@ export interface LlmEvalRun {
 
 // model_eval_runs rows for one model, oldest → newest (for trend charts).
 export async function getModelEvalRuns(modelName: string): Promise<ModelEvalRun[]> {
-  const { data, error } = await (supabase as any)
-    .from("model_eval_runs")
-    .select("id, model_name, run_date, accuracy, metric_type, notes")
-    .eq("model_name", modelName)
-    .order("run_date", { ascending: true });
-  if (error) throw error;
-  return ((data ?? []) as ModelEvalRun[]).map((r) => ({ ...r, accuracy: Number(r.accuracy) }));
+  const data = (await dbGetModelEvalRuns({ data: { model_name: modelName } })) as unknown as ModelEvalRun[];
+  return (data ?? []).map((r) => ({ ...r, accuracy: Number(r.accuracy) }));
 }
 
 // eval_runs rows, oldest → newest. `failures` is jsonb; normalise to an array.
 export async function getLlmEvalRuns(): Promise<LlmEvalRun[]> {
-  const { data, error } = await (supabase as any)
-    .from("eval_runs")
-    .select("id, run_at, agent_model, judge_model, total, passed, pass_rate, report_path, failures, notes")
-    .order("run_at", { ascending: true });
-  if (error) throw error;
-  return ((data ?? []) as Array<Omit<LlmEvalRun, "failures"> & { failures: unknown }>).map((r) => ({
+  const data = (await dbGetLlmEvalRuns()) as unknown as Array<Omit<LlmEvalRun, "failures"> & { failures: unknown }>;
+  return (data ?? []).map((r) => ({
     ...r,
     pass_rate: Number(r.pass_rate),
     failures: Array.isArray(r.failures) ? (r.failures as EvalRunFailure[]) : [],
@@ -118,13 +106,8 @@ export interface RealBacktest {
 const ELEVATED = new Set(["High", "Critical"]);
 
 export async function getRealMetrics(): Promise<RealMetricRow[]> {
-  const { data, error } = await (supabase as any)
-    .from("executive_metrics_real")
-    .select("ticker, fiscal_year, revenue, profit_margin, risk_level_rule, risk_level_model")
-    .order("ticker", { ascending: true })
-    .order("fiscal_year", { ascending: true });
-  if (error) throw error;
-  return ((data ?? []) as RealMetricRow[]).map((r) => ({
+  const data = (await dbGetRealMetrics()) as unknown as RealMetricRow[];
+  return (data ?? []).map((r) => ({
     ...r,
     fiscal_year: Number(r.fiscal_year),
     revenue: r.revenue == null ? null : Number(r.revenue),
