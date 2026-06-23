@@ -16,6 +16,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { DatasetProvider } from "@/lib/dataset-context";
 import { IndustryProvider } from "@/lib/industry-context";
 import { DbStatus } from "@/components/db-status";
+import { BrainStatus } from "@/components/brain-status";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { AuthScreen } from "@/components/auth-screen";
 import { Loader2, LogOut } from "lucide-react";
@@ -164,7 +165,10 @@ function RootComponent() {
                     <header className="h-16 flex items-center gap-3 border-b border-border bg-background/70 backdrop-blur-xl px-6 lg:px-12 sticky top-0 z-30">
                       <SidebarTrigger className="text-foreground/70 hover:text-foreground" />
                       <div className="flex-1" />
-                      <DbStatus />
+                      <div className="flex items-center gap-2">
+                        <DbStatus />
+                        <BrainStatus />
+                      </div>
                       <UserMenu />
                     </header>
                     <main className="flex-1 px-6 lg:px-12 xl:px-16 pt-6 pb-10 lg:pt-8 lg:pb-16 max-w-[1500px] w-full mx-auto">
