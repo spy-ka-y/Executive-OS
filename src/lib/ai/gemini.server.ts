@@ -1,10 +1,13 @@
-// Server-only Gemini client. Calls the Gemini REST API directly via `fetch` —
-// no SDK, no native/node-only dependencies — so it bundles cleanly for any
-// target (Vercel node, edge, workers) and never leaks into the client bundle.
-// The GEMINI_API_KEY is read from process.env and never reaches the browser.
+// Server-only AI client. Provider is AWS Bedrock (Anthropic Claude) invoked via
+// @aws-sdk/client-bedrock-runtime. This module is the single place the app talks
+// to the model; AWS credentials are read from process.env (the SDK default
+// credential provider chain) and never reach the browser (.server.ts).
 //
 // The exported surface (executeGeminiPrompt / executeGeminiText / pingGemini /
-// isGeminiConfigured / GeminiError) is unchanged so callers need no edits.
+// isGeminiConfigured / GeminiError and the *Input/*Result types) is intentionally
+// UNCHANGED so every existing caller keeps working without edits — only the
+// underlying HTTP call swapped from the Gemini REST API to Bedrock InvokeModel.
+import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 
 export class GeminiError extends Error {
   readonly code:
@@ -21,35 +24,61 @@ export class GeminiError extends Error {
   }
 }
 
+// Backward-compatible config accessor (kept for the existing surface). Bedrock
+// authenticates with an AWS access key pair, so we surface the access key id.
 export function getGeminiKey(): string {
-  return (
-    process.env.GEMINI_API_KEY ??
-    process.env.GOOGLE_API_KEY ??
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY ??
-    ""
-  );
+  return process.env.AWS_ACCESS_KEY_ID ?? "";
 }
 
 export function isGeminiConfigured(): boolean {
-  return getGeminiKey().length > 0;
+  // Bedrock needs an access key id + secret (session token optional for STS).
+  return Boolean(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
 }
 
-const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-
-// Current GA models. flash leads for decision-quality; flash-lite is the
-// higher-free-quota fallback; 2.0-flash is a final fallback. GEMINI_MODEL
-// (resolved by the caller) overrides the lead model.
-const DEFAULT_MODEL_CHAIN = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
-
-function modelsToTry(requested?: string): string[] {
-  if (!requested) return DEFAULT_MODEL_CHAIN;
-  return [requested, ...DEFAULT_MODEL_CHAIN.filter((m) => m !== requested)];
+function awsRegion(): string {
+  return process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-east-1";
 }
 
-function classifyStatus(status: number, msg: string): { code: GeminiError["code"]; retryable: boolean } {
-  if (status === 429 || /quota|rate.?limit|resource.?exhausted/i.test(msg)) return { code: "rate_limit", retryable: true };
-  if (status >= 400) return { code: "api_error", retryable: true };
-  return { code: "api_error", retryable: false };
+// Fast, cheap Anthropic model on Bedrock. Override with BEDROCK_MODEL_ID.
+const DEFAULT_MODEL = "anthropic.claude-3-haiku-20240307-v1:0";
+const MAX_TOKENS = (() => {
+  const v = Number(process.env.BEDROCK_MAX_TOKENS);
+  return Number.isFinite(v) && v > 0 ? v : 4096;
+})();
+
+// Resolve the model id to invoke. Callers historically pass Gemini model names
+// (e.g. the judge passes "gemini-2.5-pro"); those are not valid Bedrock ids, so
+// anything that isn't a Bedrock-style "<provider>.<model>" id falls back to the
+// configured default rather than failing the call.
+function resolveModelId(requested?: string): string {
+  const isBedrockId = (m?: string): m is string =>
+    !!m && /^(us\.|eu\.|apac\.)?(anthropic|amazon|meta|mistral|cohere|ai21|deepseek)\./.test(m);
+  if (isBedrockId(requested)) return requested;
+  const env = process.env.BEDROCK_MODEL_ID?.trim();
+  return env && env.length ? env : DEFAULT_MODEL;
+}
+
+let _client: BedrockRuntimeClient | null = null;
+function client(): BedrockRuntimeClient {
+  if (!_client) {
+    // Credentials come from the default provider chain (AWS_ACCESS_KEY_ID /
+    // AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN env vars on Vercel).
+    _client = new BedrockRuntimeClient({ region: awsRegion() });
+  }
+  return _client;
+}
+
+function classifyBedrockError(err: unknown): GeminiError {
+  const e = err as { name?: string; message?: string; $metadata?: { httpStatusCode?: number } };
+  const name = e?.name ?? "";
+  const status = e?.$metadata?.httpStatusCode ?? 0;
+  const msg = e?.message ?? String(err);
+  if (name === "ThrottlingException" || status === 429 || /throttl|rate.?limit|too many requests/i.test(msg))
+    return new GeminiError("rate_limit", msg);
+  if (name === "AccessDeniedException" || status === 403)
+    // Bad/insufficient credentials or model access not enabled in the account.
+    return new GeminiError("missing_key", msg);
+  return new GeminiError("api_error", msg);
 }
 
 export interface GeminiPromptInput {
@@ -67,85 +96,68 @@ interface RawResult {
   totalTokens: number;
 }
 
-interface GeminiApiResponse {
-  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
-  error?: { message?: string; status?: string };
+// Anthropic-on-Bedrock response envelope.
+interface BedrockAnthropicResponse {
+  content?: Array<{ type?: string; text?: string }>;
+  usage?: { input_tokens?: number; output_tokens?: number };
 }
 
 async function generate(input: GeminiPromptInput, json: boolean): Promise<RawResult> {
-  const key = getGeminiKey();
-  if (!key) throw new GeminiError("missing_key", "GEMINI_API_KEY is not configured on the server.");
+  if (!isGeminiConfigured())
+    throw new GeminiError("missing_key", "AWS credentials are not configured on the server (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY).");
 
-  const body = {
-    systemInstruction: { parts: [{ text: input.system }] },
-    contents: [{ role: "user", parts: [{ text: input.user }] }],
-    generationConfig: {
-      temperature: json ? 0.4 : 0.5,
-      ...(json ? { responseMimeType: "application/json" } : {}),
-    },
+  const modelId = resolveModelId(input.model);
+
+  // Anthropic Messages API payload (Bedrock invoke). JSON vs free-text differ
+  // only in temperature; the prompts and the downstream JSON extraction are
+  // unchanged from the previous provider.
+  const payload = {
+    anthropic_version: "bedrock-2023-05-31",
+    max_tokens: MAX_TOKENS,
+    temperature: json ? 0.4 : 0.5,
+    system: input.system,
+    messages: [{ role: "user", content: [{ type: "text", text: input.user }] }],
   };
 
-  let lastError: GeminiError | null = null;
-  for (const model of modelsToTry(input.model)) {
-    const t0 = Date.now();
-    let resp: Response;
-    try {
-      resp = await fetch(`${API_BASE}/${model}:generateContent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify(body),
-      });
-    } catch (err) {
-      // Network/transport failure — try the next model, then give up.
-      lastError = new GeminiError("api_error", err instanceof Error ? err.message : String(err));
-      continue;
-    }
-    const durationMs = Date.now() - t0;
+  const t0 = Date.now();
+  let resp;
+  try {
+    resp = await client().send(
+      new InvokeModelCommand({
+        modelId,
+        contentType: "application/json",
+        accept: "application/json",
+        body: JSON.stringify(payload),
+      }),
+    );
+  } catch (err) {
+    throw classifyBedrockError(err);
+  }
+  const durationMs = Date.now() - t0;
 
-    if (!resp.ok) {
-      let detail = `${resp.status} ${resp.statusText}`;
-      try {
-        const j = (await resp.json()) as GeminiApiResponse;
-        if (j.error?.message) detail = j.error.message;
-      } catch {
-        /* ignore parse failure */
-      }
-      const { code, retryable } = classifyStatus(resp.status, detail);
-      lastError = new GeminiError(code, detail);
-      if (retryable) continue;
-      throw lastError;
-    }
-
-    let data: GeminiApiResponse;
-    try {
-      data = (await resp.json()) as GeminiApiResponse;
-    } catch (err) {
-      lastError = new GeminiError("api_error", err instanceof Error ? err.message : String(err));
-      continue;
-    }
-
-    const text = (data.candidates?.[0]?.content?.parts ?? [])
-      .map((p) => p.text ?? "")
-      .join("")
-      .trim();
-    if (!text) {
-      lastError = new GeminiError("empty_response", "Gemini returned an empty response.");
-      continue;
-    }
-
-    const usage = data.usageMetadata;
-    return {
-      text,
-      model,
-      durationMs,
-      promptTokens: usage?.promptTokenCount ?? 0,
-      responseTokens: usage?.candidatesTokenCount ?? 0,
-      totalTokens: usage?.totalTokenCount ?? 0,
-    };
+  let data: BedrockAnthropicResponse;
+  try {
+    data = JSON.parse(new TextDecoder().decode(resp.body)) as BedrockAnthropicResponse;
+  } catch (err) {
+    throw new GeminiError("api_error", err instanceof Error ? err.message : String(err));
   }
 
-  throw lastError ?? new GeminiError("api_error", "All Gemini models failed.");
+  const text = (data.content ?? [])
+    .filter((b) => (b.type ?? "text") === "text")
+    .map((b) => b.text ?? "")
+    .join("")
+    .trim();
+  if (!text) throw new GeminiError("empty_response", "Bedrock returned an empty response.");
+
+  const usage = data.usage;
+  return {
+    text,
+    model: modelId,
+    durationMs,
+    promptTokens: usage?.input_tokens ?? 0,
+    responseTokens: usage?.output_tokens ?? 0,
+    totalTokens: (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0),
+  };
 }
 
 export interface GeminiPromptResult {
@@ -166,8 +178,8 @@ export async function executeGeminiPrompt(input: GeminiPromptInput): Promise<Gem
   try {
     parsed = JSON.parse(text);
   } catch {
-    // Best-effort fence/object extraction (defense against models that ignore
-    // responseMimeType and wrap JSON in prose / fences).
+    // Best-effort fence/object extraction (defense against models that wrap JSON
+    // in prose / fences).
     const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
     const candidate = (fenced ? fenced[1] : text).trim();
     const first = candidate.indexOf("{");
@@ -176,10 +188,10 @@ export async function executeGeminiPrompt(input: GeminiPromptInput): Promise<Gem
       try {
         parsed = JSON.parse(candidate.slice(first, last + 1));
       } catch {
-        throw new GeminiError("invalid_json", "Gemini returned non-JSON output", text);
+        throw new GeminiError("invalid_json", "Model returned non-JSON output", text);
       }
     } else {
-      throw new GeminiError("invalid_json", "Gemini returned non-JSON output", text);
+      throw new GeminiError("invalid_json", "Model returned non-JSON output", text);
     }
   }
 
@@ -214,7 +226,8 @@ export async function executeGeminiText(input: GeminiPromptInput): Promise<Gemin
 export async function pingGemini(): Promise<
   { ok: true; model: string; latencyMs: number } | { ok: false; code: string; message: string }
 > {
-  if (!isGeminiConfigured()) return { ok: false, code: "missing_key", message: "GEMINI_API_KEY is not set on the server." };
+  if (!isGeminiConfigured())
+    return { ok: false, code: "missing_key", message: "AWS credentials are not set on the server." };
   try {
     const r = await generate({ system: "Reply with the single word OK.", user: "ping" }, false);
     return { ok: true, model: r.model, latencyMs: r.durationMs };

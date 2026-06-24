@@ -5,8 +5,8 @@
 //   • exposes a loading/error/data hook (useBrain) for interactive components.
 //
 // No route or service file should call executeBrain directly or build its own
-// fetch — they import from here. Provider is Gemini (see gemini.server.ts);
-// the GEMINI_API_KEY is read server-side only.
+// fetch — they import from here. Provider is AWS Bedrock (see gemini.server.ts);
+// AWS credentials are read server-side only.
 import { useCallback, useRef, useState } from "react";
 import {
   executeBrain,
