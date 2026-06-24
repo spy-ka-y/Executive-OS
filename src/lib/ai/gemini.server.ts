@@ -254,8 +254,20 @@ export async function executeGeminiText(input: GeminiPromptInput): Promise<Gemin
 export async function pingGemini(): Promise<
   { ok: true; model: string; latencyMs: number } | { ok: false; code: string; message: string }
 > {
-  if (!isGeminiConfigured())
-    return { ok: false, code: "missing_key", message: "AWS credentials are not set on the server." };
+  if (!isGeminiConfigured()) {
+    // Self-diagnosing message: report which credential source (if any) was
+    // actually visible at runtime, so a glance at the chip tooltip tells you
+    // whether this is the Vercel/Lambda AWS_* reserved-name override.
+    const bedrockName = Boolean(process.env.BEDROCK_AWS_ACCESS_KEY_ID);
+    const awsName = Boolean(process.env.AWS_ACCESS_KEY_ID);
+    const seen = `BEDROCK_AWS_ACCESS_KEY_ID=${bedrockName ? "set" : "empty"}, AWS_ACCESS_KEY_ID=${awsName ? "set" : "empty"} at runtime`;
+    return {
+      ok: false,
+      code: "missing_key",
+      message:
+        `No Bedrock credentials visible at runtime (${seen}). On Vercel the AWS_* names are reserved by the Lambda runtime, so set BEDROCK_AWS_ACCESS_KEY_ID / BEDROCK_AWS_SECRET_ACCESS_KEY / BEDROCK_AWS_REGION instead.`,
+    };
+  }
   try {
     const r = await generate({ system: "Reply with the single word OK.", user: "ping" }, false);
     return { ok: true, model: r.model, latencyMs: r.durationMs };
