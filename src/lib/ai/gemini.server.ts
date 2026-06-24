@@ -24,19 +24,39 @@ export class GeminiError extends Error {
   }
 }
 
+// Credential resolution. IMPORTANT: Vercel functions run on AWS Lambda, which
+// RESERVES the standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION
+// names and overrides them at runtime with the execution role's own credentials
+// (which have no Bedrock access). So we read our keys from custom, NON-reserved
+// names first (BEDROCK_AWS_*), falling back to the standard names for local dev,
+// and pass them to the SDK explicitly rather than via the default chain.
+function accessKeyId(): string {
+  return process.env.BEDROCK_AWS_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? "";
+}
+function secretAccessKey(): string {
+  return process.env.BEDROCK_AWS_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? "";
+}
+function sessionToken(): string | undefined {
+  return process.env.BEDROCK_AWS_SESSION_TOKEN ?? process.env.AWS_SESSION_TOKEN ?? undefined;
+}
+function awsRegion(): string {
+  return (
+    process.env.BEDROCK_AWS_REGION ??
+    process.env.AWS_REGION ??
+    process.env.AWS_DEFAULT_REGION ??
+    "us-east-1"
+  );
+}
+
 // Backward-compatible config accessor (kept for the existing surface). Bedrock
 // authenticates with an AWS access key pair, so we surface the access key id.
 export function getGeminiKey(): string {
-  return process.env.AWS_ACCESS_KEY_ID ?? "";
+  return accessKeyId();
 }
 
 export function isGeminiConfigured(): boolean {
   // Bedrock needs an access key id + secret (session token optional for STS).
-  return Boolean(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
-}
-
-function awsRegion(): string {
-  return process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-east-1";
+  return Boolean(accessKeyId() && secretAccessKey());
 }
 
 // Fast, cheap Anthropic model on Bedrock. Override with BEDROCK_MODEL_ID.
@@ -61,9 +81,17 @@ function resolveModelId(requested?: string): string {
 let _client: BedrockRuntimeClient | null = null;
 function client(): BedrockRuntimeClient {
   if (!_client) {
-    // Credentials come from the default provider chain (AWS_ACCESS_KEY_ID /
-    // AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN env vars on Vercel).
-    _client = new BedrockRuntimeClient({ region: awsRegion() });
+    // Pass credentials explicitly (see the credential-resolution note above) so
+    // the user's keys are used instead of the Lambda execution role's.
+    const token = sessionToken();
+    _client = new BedrockRuntimeClient({
+      region: awsRegion(),
+      credentials: {
+        accessKeyId: accessKeyId(),
+        secretAccessKey: secretAccessKey(),
+        ...(token ? { sessionToken: token } : {}),
+      },
+    });
   }
   return _client;
 }

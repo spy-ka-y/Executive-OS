@@ -57,7 +57,7 @@ export async function callBrain(req: BrainRequest): Promise<BrainResult> {
 export function brainErrorMessage(error: BrainError): string {
   switch (error.code) {
     case "missing_key":
-      return "The AI brain is not configured (no API key on the server). Showing the built-in analysis instead.";
+      return "The AI brain is not configured (AWS Bedrock credentials missing or model access not enabled on the server). Showing the built-in analysis instead.";
     case "rate_limit":
       return "The AI brain is rate-limited right now. Please try again in a moment.";
     case "budget_exceeded":
