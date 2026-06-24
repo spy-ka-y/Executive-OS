@@ -1,7 +1,7 @@
 // Live AI-brain status chip. Calls the pingBrain server function (a real, tiny
-// Gemini call) once on mount and shows the result next to the Aurora chip, so a
-// single header screenshot proves both the AWS database and the AI brain are
-// live. Pings once per page load (no polling) to conserve quota.
+// AWS Bedrock call) once on mount and shows the result next to the Aurora chip,
+// so a single header screenshot proves both the AWS database and the AI brain
+// are live. Pings once per page load (no polling) to conserve quota.
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Sparkles } from "lucide-react";
@@ -24,7 +24,7 @@ export function BrainStatus() {
   const border = ok ? "border-success/30" : checking ? "border-border" : "border-destructive/30";
   const text = ok ? "text-success" : checking ? "text-muted-foreground" : "text-destructive";
 
-  const label = checking ? "Gemini · checking" : ok ? "Gemini · connected" : "Gemini · offline";
+  const label = checking ? "Bedrock · checking" : ok ? "Bedrock · connected" : "Bedrock · offline";
   const title =
     data && data.ok
       ? `Live AI brain — ${data.model} · ${data.latencyMs}ms`
@@ -32,7 +32,7 @@ export function BrainStatus() {
         ? "Could not reach the AI brain server function."
         : data && !data.ok
           ? `${data.code}: ${data.message}`
-          : "Checking the Gemini AI brain…";
+          : "Checking the Bedrock AI brain…";
 
   return (
     <span

@@ -139,9 +139,9 @@ export async function chat(params: {
     if (!res.ok) {
       brainNote =
         res.error.code === "rate_limit"
-          ? "> ⚠️ _Live AI is rate-limited, the Gemini free-tier quota for this key is exhausted (resets daily, or enable billing). Showing built-in analysis until it recovers._\n\n"
+          ? "> ⚠️ _Live AI is rate-limited, the AWS Bedrock request quota for this account is exhausted (try again shortly, or request a quota increase). Showing built-in analysis until it recovers._\n\n"
           : res.error.code === "missing_key"
-            ? "> ⚠️ _Live AI isn't configured, no `GEMINI_API_KEY` on the server. Showing built-in analysis._\n\n"
+            ? "> ⚠️ _Live AI isn't configured, AWS Bedrock credentials are missing or model access isn't enabled on the server. Showing built-in analysis._\n\n"
             : res.error.code === "budget_exceeded"
               ? "> ⚠️ _The daily live-AI call budget for this server is spent (resets tomorrow). Showing built-in analysis._\n\n"
               : "> ⚠️ _Live AI is temporarily unavailable. Showing built-in analysis._\n\n";

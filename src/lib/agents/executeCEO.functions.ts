@@ -127,5 +127,5 @@ export const executeCEO = createServerFn({ method: "POST" })
 
 export const getGeminiStatus = createServerFn({ method: "GET" }).handler(async () => {
   const { isGeminiConfigured } = await import("@/lib/ai/gemini.server");
-  return { connected: isGeminiConfigured(), model: "gemini-2.5-flash" };
+  return { connected: isGeminiConfigured(), model: "Claude 3 Haiku (Bedrock)" };
 });

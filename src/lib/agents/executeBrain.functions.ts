@@ -131,7 +131,7 @@ export const executeBrain = createServerFn({ method: "POST" })
 export const getBrainStatus = createServerFn({ method: "GET" }).handler(async () => {
   const { isGeminiConfigured } = await import("@/lib/ai/gemini.server");
   const { usageSnapshot, defaultModel } = await import("@/lib/ai/cost-control.server");
-  return { connected: isGeminiConfigured(), model: defaultModel() ?? "gemini-2.5-flash", usage: usageSnapshot() };
+  return { connected: isGeminiConfigured(), model: defaultModel() ?? "Claude 3 Haiku (Bedrock)", usage: usageSnapshot() };
 });
 
 // On-demand live connectivity test. Actually calls Gemini and returns the real

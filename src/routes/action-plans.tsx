@@ -413,7 +413,7 @@ function ExecutionCenterPage() {
     [initiatives, kpiTargets, intel, consensus],
   );
 
-  // AI Execution Advisor, real Gemini recommendations over live execution
+  // AI Execution Advisor, real AWS Bedrock recommendations over live execution
   // state, falling back to the heuristic advisor above when unavailable.
   type AdvisorItem = { title: string; reasoning: string; confidence: number; revenueImpact?: number; profitImpact?: number };
   const [aiAdvisor, setAiAdvisor] = useState<AdvisorItem[] | null>(null);

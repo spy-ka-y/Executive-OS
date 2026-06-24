@@ -566,7 +566,7 @@ function ReportsPage() {
       // Stamp provenance onto the artifact itself so the document is honest
       // wherever it travels, not just via a transient toast.
       const provenance = narrative
-        ? "SOURCE: Live AI narrative (Gemini), grounded in the figures below."
+        ? "SOURCE: Live AI narrative (AWS Bedrock), grounded in the figures below."
         : `SOURCE: Built-in analysis (${res.ok ? "live AI returned no text" : brainErrorMessage(res.error)}). Figures derived deterministically from your data.`;
       const body = narrative
         ? `EXECUTIVE BRIEF, ${dataset.name}\n${new Date().toLocaleString()}\n${provenance}\n\n${narrative}\n\n- SUPPORTING DETAIL -\n${facts}`

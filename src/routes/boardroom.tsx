@@ -114,7 +114,7 @@ function BoardroomPage() {
   const [session, setSession] = useState<{ id: string; startedAt: string; datasetId: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Phase 11, Live AI debate: real Gemini reasoning for every board agent
+  // Phase 11, Live AI debate: real AWS Bedrock reasoning for every board agent
   // (not just CEO). Keyed by agent; merged over the heuristic responses below.
   type AiAgentReply = { observation: string; insight: string; recommendation: string; rationale: string; confidence: number; support: number };
   const [aiAgents, setAiAgents] = useState<Record<string, AiAgentReply>>({});
@@ -175,7 +175,7 @@ function BoardroomPage() {
   const orchestration = useMemo(() => orchestrationStatus(!!intel), [intel]);
   const provReadinessBase = useMemo(() => providerReadiness(), []);
 
-  // Phase 10, Real CEO execution via Gemini (server function).
+  // Phase 10, Real CEO execution via AWS Bedrock (server function).
   const callCEO = useServerFn(executeCEO);
   const callGeminiStatus = useServerFn(getGeminiStatus);
   const callPingBrain = useServerFn(pingBrain);
@@ -239,7 +239,7 @@ function BoardroomPage() {
   }, [intel, promptBundle, callCEO]);
 
   // Overlay the real CEO envelope onto the heuristic pipeline output so the
-  // existing Section 14 / 15 UI surfaces live Gemini reasoning for CEO.
+  // existing Section 14 / 15 UI surfaces live AWS Bedrock reasoning for CEO.
   const agentExecutionsLive: AgentExecutionResult[] = useMemo(() => {
     if (!pipeline) return agentExecutions;
     if (!(ceoExecution.result && ceoExecution.result.ok)) return agentExecutions;
@@ -265,7 +265,7 @@ function BoardroomPage() {
         status: {
           ...r.status,
           status: "Completed",
-          provider: `Gemini · ${real.meta.model}`,
+          provider: `Bedrock · ${real.meta.model}`,
           durationMs: real.meta.durationMs,
           fellBackToHeuristic: false,
           validationErrors: [],
@@ -375,7 +375,7 @@ function BoardroomPage() {
     [debate.responses, aiAgents],
   );
 
-  // When the live Gemini debate has produced replies, the headline Board
+  // When the live AWS Bedrock debate has produced replies, the headline Board
   // Decision must reflect THOSE agents — not the heuristic baseline. Recompute
   // consensus and confidence from the actual live agent supports/confidences so
   // the verdict genuinely changes with the live debate.
@@ -398,7 +398,7 @@ function BoardroomPage() {
 
   const stanceToSupport = (s: string) => (s === "Support" ? 85 : s === "Conditional" ? 65 : s === "Neutral" ? 50 : 25);
 
-  // Run a real, parallel AI debate, one Gemini call per board agent, grounded
+  // Run a real, parallel AI debate, one AWS Bedrock call per board agent, grounded
   // in the dataset. Heuristic responses remain as the fallback for any agent
   // whose call fails or returns a malformed payload.
   async function runLiveDebate() {
@@ -533,7 +533,7 @@ function BoardroomPage() {
                 <DecisionStat label="Consensus" value={`${liveDecision.consensusScore}/100`} />
               </div>
               <p className="text-[10px] text-muted-foreground mt-3">
-                {hasLiveDebate ? "Consensus & confidence computed from the live Gemini agent debate." : "Heuristic baseline. Start a meeting to run the live AI debate."}
+                {hasLiveDebate ? "Consensus & confidence computed from the live AWS Bedrock agent debate." : "Heuristic baseline. Start a meeting to run the live AI debate."}
                 {" "}*Revenue/profit impact is an illustrative estimate (revenue-scaled), not a modeled prediction.
               </p>
             </div>
@@ -578,7 +578,7 @@ function BoardroomPage() {
                 ) : Object.keys(aiAgents).length > 0 ? (
                   <span className="text-xs text-success flex items-center gap-1"><Sparkles className="h-3 w-3" /> {Object.keys(aiAgents).length} agents answered with live AI · grounded in your data</span>
                 ) : (
-                  <span className="text-xs text-muted-foreground">Run a live debate to have each agent reason with real AI (Gemini).</span>
+                  <span className="text-xs text-muted-foreground">Run a live debate to have each agent reason with real AI (AWS Bedrock).</span>
                 )}
               </div>
             </div>
@@ -991,7 +991,7 @@ function ContextPreview({ context, scenario }: { context: ExecutiveContext; scen
     memoryStats: context.memoryStats,
   };
   return (
-    <Section icon={<Cpu className="h-4 w-4" />} label="01.6" title="Executive Context Preview" subtitle="The full briefing object the agents reason from, the same payload sent to Gemini on each live debate.">
+    <Section icon={<Cpu className="h-4 w-4" />} label="01.6" title="Executive Context Preview" subtitle="The full briefing object the agents reason from, the same payload sent to AWS Bedrock on each live debate.">
       <Collapsible open={open} onOpenChange={setOpen}>
         <div className="executive-card rounded-xl">
           <CollapsibleTrigger className="w-full flex items-center justify-between p-5 text-left">
@@ -1189,7 +1189,7 @@ function ConsensusDistribution({ consensus }: { consensus: ConsensusBreakdown })
 
 function DecisionFramework({ record }: { record: BoardDecisionRecord }) {
   return (
-    <Section icon={<ShieldCheck className="h-4 w-4" />} label="06.5" title="Board Decision Framework" subtitle="The canonical decision schema each Gemini agent response is validated against.">
+    <Section icon={<ShieldCheck className="h-4 w-4" />} label="06.5" title="Board Decision Framework" subtitle="The canonical decision schema each AWS Bedrock agent response is validated against.">
       <div className="executive-card-elevated rounded-xl p-6 space-y-5">
         <div className="grid md:grid-cols-2 gap-3">
           <DecisionStat label="Strategic Objective" value={record.strategicObjective} />
@@ -1248,12 +1248,12 @@ const LEVEL_TONE: Record<ReadinessLevel, string> = {
 function BrainStatus({ readiness }: { readiness: BrainReadiness }) {
   const tone = readiness.score >= 80 ? "success" : readiness.score >= 50 ? "warning" : "destructive";
   return (
-    <Section icon={<Brain className="h-4 w-4" />} label="17" title="Executive Brain Status" subtitle="Reasoning stack powering the live Gemini agents. Each component is wired, inspectable, and in use during a live debate.">
+    <Section icon={<Brain className="h-4 w-4" />} label="17" title="Executive Brain Status" subtitle="Reasoning stack powering the live AWS Bedrock agents. Each component is wired, inspectable, and in use during a live debate.">
       <div className="grid lg:grid-cols-[260px_1fr] gap-4">
         <div className="executive-card-elevated rounded-xl p-6 flex flex-col items-center">
           <ScoreRing value={readiness.score} label="AI Readiness" size={140} tone={tone} />
           <p className="text-[11px] text-muted-foreground text-center mt-3">
-            {readiness.score >= 80 ? "Reasoning stack fully wired and running live against Gemini." : readiness.score >= 50 ? "Most components wired, finish the partials to unlock full reasoning." : "Foundation in place, load a dataset and seed memory to advance."}
+            {readiness.score >= 80 ? "Reasoning stack fully wired and running live against AWS Bedrock." : readiness.score >= 50 ? "Most components wired, finish the partials to unlock full reasoning." : "Foundation in place, load a dataset and seed memory to advance."}
           </p>
         </div>
         <div className="grid sm:grid-cols-2 gap-2">
@@ -1284,7 +1284,7 @@ const STATUS_TONE: Record<"READY" | "PENDING" | "MISSING", string> = {
 
 function OrchestrationCenter({ status }: { status: ReturnType<typeof orchestrationStatus> }) {
   return (
-    <Section icon={<Workflow className="h-4 w-4" />} label="11" title="LLM Orchestration Center" subtitle="The pipeline ExecutiveOS uses to talk to Gemini. Every stage is wired, inspectable, and runs on each live debate.">
+    <Section icon={<Workflow className="h-4 w-4" />} label="11" title="LLM Orchestration Center" subtitle="The pipeline ExecutiveOS uses to talk to AWS Bedrock. Every stage is wired, inspectable, and runs on each live debate.">
       <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2">
         {status.map((s) => (
           <div key={s.key} className="executive-card rounded-xl p-4">
@@ -1327,7 +1327,7 @@ function CollapsibleCard({ title, subtitle, body, icon }: { title: string; subti
 
 function PromptBuilderInspector({ bundle }: { bundle: ExecutivePromptBundle }) {
   return (
-    <Section icon={<Terminal className="h-4 w-4" />} label="12" title="Executive Prompt Builder" subtitle="The exact prompt and context payload sent to Gemini on each live debate. Shown here for inspection.">
+    <Section icon={<Terminal className="h-4 w-4" />} label="12" title="Executive Prompt Builder" subtitle="The exact prompt and context payload sent to AWS Bedrock on each live debate. Shown here for inspection.">
       <div className="grid lg:grid-cols-3 gap-3">
         <CollapsibleCard title="SYSTEM PROMPT" subtitle={`${bundle.systemPrompt.length} chars`} body={bundle.systemPrompt} />
         <CollapsibleCard title="USER PROMPT" subtitle={`${bundle.userPrompt.split("\n").length} lines`} body={bundle.userPrompt} />
@@ -1339,7 +1339,7 @@ function PromptBuilderInspector({ bundle }: { bundle: ExecutivePromptBundle }) {
 
 function AgentPromptGeneration({ prompts }: { prompts: AgentPromptObject[] }) {
   return (
-    <Section icon={<Layers className="h-4 w-4" />} label="13" title="Agent Prompt Generation" subtitle="Per-agent prompt objects produced for every persona and sent to Gemini during a live debate.">
+    <Section icon={<Layers className="h-4 w-4" />} label="13" title="Agent Prompt Generation" subtitle="Per-agent prompt objects produced for every persona and sent to AWS Bedrock during a live debate.">
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
         {prompts.map((p) => (
           <div key={p.role} className="executive-card rounded-xl overflow-hidden">
@@ -1362,7 +1362,7 @@ function AgentContractsPanel() {
   const contracts = useMemo(() => listAgentContracts(), []);
   const validations = useMemo(() => validateAllContracts(), []);
   return (
-    <Section icon={<ShieldCheck className="h-4 w-4" />} label="13.5" title="Agent Contracts" subtitle="Production-grade reasoning contracts. Each persona binds decision rules, must-consider fields, allowed stances, and a strict response schema enforced on every Gemini response.">
+    <Section icon={<ShieldCheck className="h-4 w-4" />} label="13.5" title="Agent Contracts" subtitle="Production-grade reasoning contracts. Each persona binds decision rules, must-consider fields, allowed stances, and a strict response schema enforced on every AWS Bedrock response.">
       <div className="grid lg:grid-cols-3 gap-2 mb-4">
         <div className="executive-card-elevated rounded-xl p-4 lg:col-span-1">
           <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground mb-2">Contract Completeness</p>
@@ -1511,7 +1511,7 @@ function AgentExecutionPanel({
       icon={<Bot className="h-4 w-4" />}
       label="14"
       title="Agent Execution Layer"
-      subtitle="Phase 10 · CEO agent executes against Gemini 2.5 Flash. Remaining agents run on the local heuristic engine until they are upgraded."
+      subtitle="Phase 10 · CEO agent executes against Claude 3 Haiku on AWS Bedrock. Remaining agents run on the local heuristic engine until they are upgraded."
     >
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <Badge variant="outline" className="bg-success/15 text-success border-success/30">EXECUTION READY</Badge>
@@ -1523,7 +1523,7 @@ function AgentExecutionPanel({
               : "bg-destructive/15 text-destructive border-destructive/30"
           }
         >
-          CEO · Gemini {geminiStatus?.connected ? "Connected" : "Not Connected"}
+          CEO · Bedrock {geminiStatus?.connected ? "Connected" : "Not Connected"}
         </Badge>
         {ceoExecution.state === "running" && (
           <Badge variant="outline" className="bg-primary/15 text-primary border-primary/30">CEO Executing…</Badge>
@@ -1535,7 +1535,7 @@ function AgentExecutionPanel({
         )}
         {pipeline?.providerUsage.map((p) => (
           <Badge key={p.provider} variant="outline" className="bg-muted/30 text-muted-foreground border-border/60">
-            {p.provider} × {p.count}
+            {p.provider === "gemini" ? "bedrock" : p.provider} × {p.count}
           </Badge>
         ))}
         {pipeline && (
@@ -1573,7 +1573,7 @@ function AgentExecutionPanel({
                     </div>
                     <p className="font-display text-sm">{r.status.agent}</p>
                     {isRealCeo && (
-                      <Badge variant="outline" className="bg-success/15 text-success border-success/30 text-[9px]">LIVE · Gemini</Badge>
+                      <Badge variant="outline" className="bg-success/15 text-success border-success/30 text-[9px]">LIVE · Bedrock</Badge>
                     )}
                   </div>
                   <Badge variant="outline" className={statusBadgeClass(r.status.status)}>{r.status.status}</Badge>
@@ -1645,7 +1645,7 @@ function ExecutionTimelinePanel({
   const ceoStages: ExecutionStage[] = [
     {
       key: "ceo-executed",
-      label: "CEO Executed (Gemini)",
+      label: "CEO Executed (Bedrock)",
       status:
         ceoExecution.state === "running" ? "Running" :
         ceoExecution.state === "completed" ? "Completed" :
@@ -1656,7 +1656,7 @@ function ExecutionTimelinePanel({
           : ceoExecution.result && !ceoExecution.result.ok
             ? `Failed · ${ceoExecution.result.error.code}: ${ceoExecution.result.error.message}`
             : ceoExecution.state === "running"
-              ? "Dispatching CEO prompt to Gemini 2.5 Flash…"
+              ? "Dispatching CEO prompt to Claude 3 Haiku on AWS Bedrock…"
               : "Waiting for context + prompts.",
       durationMs: ceoExecution.durationMs ?? null,
       startedAt: ceoExecution.startedAt ? new Date(ceoExecution.startedAt).toISOString() : null,
@@ -1675,7 +1675,7 @@ function ExecutionTimelinePanel({
           ? `Schema OK · stance ${ceoExecution.result.response.stance} · confidence ${ceoExecution.result.response.confidence}%`
           : ceoExecution.result && !ceoExecution.result.ok
             ? `Validation blocked · ${ceoExecution.result.error.code}`
-            : "Awaiting Gemini response.",
+            : "Awaiting Bedrock response.",
       durationMs: null,
       startedAt: null,
       completedAt: ceoExecution.result ? new Date().toISOString() : null,
@@ -1688,7 +1688,7 @@ function ExecutionTimelinePanel({
       icon={<Workflow className="h-4 w-4" />}
       label="14.5"
       title="Execution Timeline"
-      subtitle="Phase 10 · Live trace including the real Gemini-powered CEO execution stage."
+      subtitle="Phase 10 · Live trace including the real AWS Bedrock-powered CEO execution stage."
     >
       {allStages.length === 0 ? (
         <p className="text-xs text-muted-foreground">Awaiting first run…</p>
@@ -1807,10 +1807,10 @@ function ProviderReadinessPanel({
     { label: "Provider Interface Ready", on: readiness.providerInterfaceReady },
     { label: "Model Routing Ready", on: readiness.modelRoutingReady },
     { label: "Prompt Architecture Ready", on: readiness.promptArchitectureReady },
-    { label: "Gemini Connected", on: !!geminiStatus?.connected },
+    { label: "Bedrock Connected", on: !!geminiStatus?.connected },
   ];
   return (
-    <Section icon={<Plug className="h-4 w-4" />} label="16" title="Provider Readiness" subtitle="The LLM provider ExecutiveOS runs against. The board agents execute against Gemini in real time via the server-side GEMINI_API_KEY.">
+    <Section icon={<Plug className="h-4 w-4" />} label="16" title="Provider Readiness" subtitle="The LLM provider ExecutiveOS runs against. The board agents execute against AWS Bedrock in real time via server-side AWS credentials.">
       <div className="grid md:grid-cols-3 gap-3 mb-3">
         {PROVIDERS.map((p) => {
           const isGemini = p.id === "gemini";
@@ -1818,8 +1818,8 @@ function ProviderReadinessPanel({
           const model = isGemini && geminiStatus ? geminiStatus.model : p.defaultModel;
           const notes = isGemini
             ? connected
-              ? "Live · executing real CEO agent via server-side GEMINI_API_KEY."
-              : "GEMINI_API_KEY not configured on the server. CEO falls back to local heuristic engine."
+              ? "Live · executing real CEO agent via server-side AWS Bedrock credentials."
+              : "AWS Bedrock credentials/model access not configured on the server. CEO falls back to local heuristic engine."
             : p.notes;
           return (
             <div key={p.id} className="executive-card rounded-xl p-4">
