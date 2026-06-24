@@ -24,8 +24,8 @@ export interface RunSummary {
   notes: string;
 }
 
-// Mirrors supabase/migrations/20260620193000_eval_runs.sql (without the schema
-// qualifier so it applies to whichever default schema the connection uses).
+// Self-creating DDL for the eval_runs table (no schema qualifier so it applies
+// to whichever default schema the Aurora connection uses).
 export const EVAL_RUNS_DDL = `create table if not exists eval_runs (
   id          bigint generated always as identity primary key,
   run_at      timestamptz not null default now(),

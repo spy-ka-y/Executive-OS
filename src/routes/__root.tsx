@@ -23,7 +23,6 @@ import { Loader2, LogOut } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { Cursor } from "@/components/cursor";
 import { RouteProgress } from "@/components/route-progress";
-import { supabase } from "@/integrations/supabase/client";
 
 function NotFoundComponent() {
   return (
@@ -127,27 +126,6 @@ function RootComponent() {
     pendoInitialized.current = true;
 
     pendo.initialize({ visitor: { id: '' } });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (
-        (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') &&
-        session?.user
-      ) {
-        pendo.identify({
-          visitor: {
-            id: session.user.id,
-          },
-        });
-      } else if (event === 'SIGNED_OUT') {
-        pendo.clearSession();
-      }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
   }, []);
 
   return (

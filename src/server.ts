@@ -4,7 +4,7 @@ import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 
 // Load .env into process.env in the server runtime so server-only secrets
-// (GEMINI_API_KEY, SUPABASE_URL, …) are available to server functions during
+// (DATABASE_URL, GEMINI_API_KEY, …) are available to server functions during
 // local dev. Uses Node's built-in loader (20.12+); a no-op when there is no
 // .env file (e.g. on Vercel, where env vars are injected by the platform).
 try {
