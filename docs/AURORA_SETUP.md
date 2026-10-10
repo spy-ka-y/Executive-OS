@@ -53,13 +53,13 @@ If it fails, the message says why (usually password or the security-group rule).
 ```
 npm run dev
 ```
-- The header chips should read **Aurora · connected** and **Gemini · connected**.
+- The header chips should read **Aurora · connected** and **Bedrock · connected**.
 - Sign up, upload a dataset, generate a CEO Brief → all persisted in Aurora.
 
 ## 6. Deploy to Vercel
 In the Vercel project → Settings → Environment Variables, add (for Production):
 - `DATABASE_URL` = the same Aurora string
-- `GEMINI_API_KEY` = your Gemini key (`AIza…`)
+- `BEDROCK_AWS_ACCESS_KEY_ID`, `BEDROCK_AWS_SECRET_ACCESS_KEY`, `BEDROCK_AWS_REGION` = AWS credentials with Bedrock access
 
 Redeploy. Open the app → both chips green = live on the hackathon stack.
 

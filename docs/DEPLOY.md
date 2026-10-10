@@ -24,12 +24,11 @@ Server-only (never exposed to the browser):
 | Var | Required | Purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | **yes** | Amazon Aurora PostgreSQL connection string (cluster endpoint or RDS Proxy). The app's entire data layer. Server-only. |
-| `GEMINI_API_KEY` | yes (for live AI) | Google Gemini key. Aliases `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` also accepted. Without it the app runs on the built-in deterministic engine and says so. |
-| `GEMINI_MODEL` | no | Override the default model (`gemini-2.5-flash`). |
+| `BEDROCK_AWS_ACCESS_KEY_ID`, `BEDROCK_AWS_SECRET_ACCESS_KEY`, `BEDROCK_AWS_REGION` | yes (for live AI) | AWS credentials with Bedrock access. On Vercel use these `BEDROCK_AWS_*` names, because the plain `AWS_*` names are reserved by the runtime. Without them the app runs on the built-in deterministic engine and says so. |
+| `BEDROCK_MODEL_ID`, `BEDROCK_MAX_TOKENS` | no | Override the Bedrock model id and max output tokens. |
 | `LLM_DAILY_CALL_BUDGET` | no | Max live calls/day/instance before falling back to built-in (default 250). |
 | `LLM_CACHE_TTL_MS` | no | Cache TTL for identical prompts (default 1h). |
 | `PGSSL` | no | Set to `disable` only for a local non-TLS Postgres. Aurora uses TLS (default). |
-| `SUPABASE_*` / `VITE_SUPABASE_*` | no | Optional auth shim only. The app runs fully on Aurora without them. |
 
 ## 3. Database setup (Amazon Aurora PostgreSQL)
 
@@ -42,8 +41,7 @@ Server-only (never exposed to the browser):
 3. Set `DATABASE_URL` in Vercel and in local `.env`.
 
 For high concurrency, put **Amazon RDS Proxy** in front and point `DATABASE_URL`
-at the proxy endpoint — no code change. (`supabase/migrations/` is legacy from the
-previous Supabase backend and is no longer used by the app.)
+at the proxy endpoint — no code change. (`supabase/migrations/` is legacy from an earlier Supabase backend and is no longer used by the app.)
 
 ## 4. After deploy — verify live AI
 
