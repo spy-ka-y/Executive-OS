@@ -31,7 +31,8 @@ Amazon Aurora PostgreSQL (no third-party auth provider):
   ownership on every write — add an ownership check there for defense-in-depth.
 - No rate-limiting on auth endpoints yet; add one (and email verification /
   password reset) for production.
-- LLM data leaves your server to Google (Gemini). Review Google's data-use terms
-  before sending confidential figures; consider an enterprise LLM agreement.
+- LLM prompts, including figures derived from uploaded datasets, leave your server
+  for AWS Bedrock (Anthropic Claude). Review the Bedrock data-use terms before
+  sending confidential figures; consider an enterprise agreement.
 - Legacy `supabase/migrations/` is unused (the app is on Aurora); Supabase is an
   optional, no-op auth shim that can be removed entirely.
