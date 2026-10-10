@@ -66,8 +66,6 @@ npm run build
 npm run eval:agent       # LLM eval harness
 ```
 
-Use `npm install`, not `npm ci`: `package-lock.json` is currently out of sync with `package.json`.
-
 The ML pipeline (training, ONNX export, evaluation and the Node parity check) is documented in [`ml/README.md`](ml/README.md). Deployment notes are in `docs/DEPLOY.md` and the Aurora walkthrough is in `docs/AURORA_SETUP.md`.
 
 ## Repository layout
